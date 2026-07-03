@@ -46,6 +46,8 @@ pub const SANDBOX_CFG_PATH_KEY: &str = "io.katacontainers.config_path";
 pub const BUNDLE_PATH_KEY: &str = "io.katacontainers.pkg.oci.bundle_path";
 /// The annotation key to fetch container type.
 pub const CONTAINER_TYPE_KEY: &str = "io.katacontainers.pkg.oci.container_type";
+/// A pod annotation mapping confidential block-volume names to activation configuration.
+pub const KATA_ANNO_CONFIDENTIAL_VOLUME: &str = "io.katacontainers.volume.confidential-ro";
 
 // Container resource related annotations
 /// Prefix for Kata container resource related annotations.

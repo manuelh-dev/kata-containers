@@ -5,10 +5,8 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{anyhow, bail, Context, Result};
+use kata_types::annotations::KATA_ANNO_CONFIDENTIAL_VOLUME;
 use serde::Deserialize;
-
-pub const CONFIDENTIAL_VOLUME_ANNOTATION_KEY: &str =
-    "io.katacontainers.volume.confidential-ro";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfidentialVolume {
@@ -28,7 +26,7 @@ pub fn parse_annotations(
     annotations: &HashMap<String, String>,
     feature_enabled: bool,
 ) -> Result<HashMap<String, ConfidentialVolume>> {
-    let Some(raw_value) = annotations.get(CONFIDENTIAL_VOLUME_ANNOTATION_KEY) else {
+    let Some(raw_value) = annotations.get(KATA_ANNO_CONFIDENTIAL_VOLUME) else {
         return Ok(HashMap::new());
     };
     if !feature_enabled {
@@ -37,7 +35,7 @@ pub fn parse_annotations(
 
     let entries: HashMap<String, AnnotationValue> = serde_json::from_str(raw_value)
         .with_context(|| {
-            format!("parse confidential volume annotation {CONFIDENTIAL_VOLUME_ANNOTATION_KEY}")
+            format!("parse confidential volume annotation {KATA_ANNO_CONFIDENTIAL_VOLUME}")
         })?;
     if entries.is_empty() {
         bail!("confidential volume annotation must select at least one volume");
@@ -50,14 +48,14 @@ pub fn parse_annotations(
         validate_manifest_uri(&value.manifest_uri)?;
 
         let volume = ConfidentialVolume {
-            annotation_key: CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            annotation_key: KATA_ANNO_CONFIDENTIAL_VOLUME.to_string(),
             manifest_uri: value.manifest_uri,
             device_path: value.device_path.clone(),
         };
         if result.insert(value.device_path.clone(), volume).is_some() {
             bail!(
                 "confidential volumes in annotation {} both select {}",
-                CONFIDENTIAL_VOLUME_ANNOTATION_KEY,
+                KATA_ANNO_CONFIDENTIAL_VOLUME,
                 value.device_path
             );
         }
@@ -124,7 +122,7 @@ mod tests {
     #[test]
     fn parses_enabled_annotation() {
         let annotations = HashMap::from([(
-            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            KATA_ANNO_CONFIDENTIAL_VOLUME.to_string(),
             r#"{"block-disk":{"manifestUri":"kbs:///kata-ci/storage-manifest/model-v1","devicePath":"/dev/hostdisk"}}"#
                 .to_string(),
         )]);
@@ -138,7 +136,7 @@ mod tests {
     #[test]
     fn annotation_fails_when_feature_is_disabled() {
         let annotations = HashMap::from([(
-            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            KATA_ANNO_CONFIDENTIAL_VOLUME.to_string(),
             r#"{"block-disk":{"manifestUri":"kbs:///a/b/c","devicePath":"/dev/hostdisk"}}"#
                 .to_string(),
         )]);
@@ -148,7 +146,7 @@ mod tests {
     #[test]
     fn rejects_two_volumes_for_one_device() {
         let annotations = HashMap::from([(
-            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            KATA_ANNO_CONFIDENTIAL_VOLUME.to_string(),
             r#"{
                 "first":{"manifestUri":"kbs:///a/b/c","devicePath":"/dev/hostdisk"},
                 "second":{"manifestUri":"kbs:///a/b/c","devicePath":"/dev/hostdisk"}
@@ -161,7 +159,7 @@ mod tests {
     #[test]
     fn rejects_empty_volume_map() {
         let annotations = HashMap::from([(
-            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            KATA_ANNO_CONFIDENTIAL_VOLUME.to_string(),
             "{}".to_string(),
         )]);
         assert!(parse_annotations(&annotations, true).is_err());
