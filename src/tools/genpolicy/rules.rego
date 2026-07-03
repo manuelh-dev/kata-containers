@@ -525,8 +525,8 @@ allow_volume_device(p_device, i_device) if {
 
 allow_volume_device(p_device, i_device) if {
     p_device.container_path == i_device.container_path
-    p_device.type == "secure-volume"
-    i_device.type == "secure-volume"
+    p_device.type_ == "secure-volume"
+    i_device.type_ == "secure-volume"
     p_device.secure_volume.annotation_key == i_device.secure_volume.annotation_key
     p_device.secure_volume.manifest_uri == i_device.secure_volume.manifest_uri
     i_device.secure_volume.source_driver in ["blk", "blk-ccw", "mmioblk", "scsi"]
