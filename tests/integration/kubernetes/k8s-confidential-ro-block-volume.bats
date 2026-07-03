@@ -125,9 +125,9 @@ write_test_manifests() {
 	exec_host "${node}" sudo losetup --read-only "${loop_device}" "${volume_image}"
 
 	kubectl create -f "${pod_yaml}"
-	cmd="kubectl get pod '${pod_name}' -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' | grep -q StartError"
+	cmd="kubectl get pod '${pod_name}' -o jsonpath='{.status.containerStatuses[0].state}' | grep -q StartError"
 	waitForProcess 180 3 "${cmd}"
-	run kubectl get pod "${pod_name}" -o jsonpath='{.status.containerStatuses[0].state.terminated.message}'
+	run bash -c "kubectl get pod '${pod_name}' -o json | jq -r '.status.containerStatuses[0].state | .terminated.message // .waiting.message // \"\"'"
 	[[ "${status}" -eq 0 ]]
 	[[ "${output}" == *"activate confidential block device"* ]]
 }
