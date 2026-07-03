@@ -23,6 +23,7 @@ use hypervisor::{
 };
 use network::NetworkConfig;
 pub mod rootfs;
+mod secure_volume;
 pub mod share_fs;
 pub mod volume;
 pub use manager::ResourceManager;

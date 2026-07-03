@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: POD_NAME
+  annotations:
+    io.katacontainers.config.hypervisor.kernel_params: "agent.aa_kbc_params=cc_kbc::KBS_ADDRESS"
+    io.katacontainers.volume.confidential-ro: '{"block-disk":{"manifestUri":"MANIFEST_URI","devicePath":"/dev/hostdisk"}}'
+spec:
+  runtimeClassName: RUNTIME_CLASS
+  restartPolicy: Never
+  containers:
+    - name: workload
+      image: ubuntu:22.04
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        privileged: true
+      command:
+        - /bin/sh
+        - -c
+        - >-
+          mkdir -p /mnt/model &&
+          mount -o ro /dev/hostdisk /mnt/model &&
+          grep -Fx confidential-volume-e2e-ok /mnt/model/model.txt &&
+          ! touch /mnt/model/must-not-write &&
+          echo confidential-volume-read-only-ok
+      volumeDevices:
+        - name: block-disk
+          devicePath: /dev/hostdisk
+  volumes:
+    - name: block-disk
+      persistentVolumeClaim:
+        claimName: PVC_NAME
+        readOnly: true

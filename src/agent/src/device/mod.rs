@@ -7,6 +7,7 @@
 use self::block_device_handler::{VirtioBlkMmioDeviceHandler, VirtioBlkPciDeviceHandler};
 use self::nvdimm_device_handler::VirtioNvdimmDeviceHandler;
 use self::scsi_device_handler::ScsiDeviceHandler;
+use self::secure_volume_device_handler::SecureVolumeDeviceHandler;
 use self::vfio_device_handler::{VfioApDeviceHandler, VfioPciDeviceHandler};
 use crate::pci;
 use crate::sandbox::PciHostGuestMapping;
@@ -39,6 +40,7 @@ pub mod block_device_handler;
 pub mod network_device_handler;
 pub mod nvdimm_device_handler;
 pub mod scsi_device_handler;
+pub mod secure_volume_device_handler;
 pub mod vfio_device_handler;
 
 pub const BLOCK: &str = "block";
@@ -144,6 +146,7 @@ impl<T: Into<DevUpdate>> From<T> for SpecUpdate {
 
 #[derive(Debug)]
 pub struct DeviceContext<'a> {
+    cid: &'a str,
     logger: &'a Logger,
     sandbox: &'a Arc<Mutex<Sandbox>>,
 }
@@ -168,6 +171,7 @@ lazy_static! {
             Arc::new(VirtioBlkPciDeviceHandler {}),
             Arc::new(VirtioNvdimmDeviceHandler {}),
             Arc::new(ScsiDeviceHandler {}),
+            Arc::new(SecureVolumeDeviceHandler {}),
             Arc::new(VfioPciDeviceHandler {}),
             Arc::new(VfioApDeviceHandler {}),
             #[cfg(target_arch = "s390x")]
@@ -194,7 +198,11 @@ pub async fn add_devices(
     for device in devices.iter() {
         validate_device(logger, device, sandbox).await?;
         if let Some(handler) = DEVICE_HANDLERS.handler(&device.type_) {
-            let mut ctx = DeviceContext { logger, sandbox };
+            let mut ctx = DeviceContext {
+                cid,
+                logger,
+                sandbox,
+            };
 
             match handler.device_handler(device, &mut ctx).await {
                 Ok(update) => {
@@ -210,7 +218,13 @@ pub async fn add_devices(
                         }
 
                         // Update cgroup to allow all devices added to guest.
-                        insert_devices_cgroup_rule(logger, spec, &dev_update.info, true, "rwm")
+                        let access =
+                            if device.type_ == kata_types::device::DRIVER_SECURE_VOLUME_TYPE {
+                                "r"
+                            } else {
+                                "rwm"
+                            };
+                        insert_devices_cgroup_rule(logger, spec, &dev_update.info, true, access)
                             .context("Update device cgroup")?;
                     }
 

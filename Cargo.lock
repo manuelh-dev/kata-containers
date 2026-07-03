@@ -6409,6 +6409,7 @@ dependencies = [
  "tests_utils",
  "tokio",
  "tracing",
+ "url",
  "uuid 0.4.0",
  "walkdir",
 ]

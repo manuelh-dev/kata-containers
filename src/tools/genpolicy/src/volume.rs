@@ -63,7 +63,9 @@ pub struct EmptyDirVolumeSource {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistentVolumeClaimVolumeSource {
     pub claimName: String,
-    // TODO: additional fields.
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readOnly: Option<bool>,
 }
 
 /// See Reference / Kubernetes API / Config and Storage Resources / Volume.

@@ -27,6 +27,9 @@ pub const DRIVER_VFIO_AP_TYPE: &str = "vfio-ap";
 /// DRIVER_VFIO_AP_COLD_TYPE is the device driver for vfio-ap coldplug.
 pub const DRIVER_VFIO_AP_COLD_TYPE: &str = "vfio-ap-cold";
 
+/// DRIVER_SECURE_VOLUME_TYPE activates an attached block device through CDH.
+pub const DRIVER_SECURE_VOLUME_TYPE: &str = "secure-volume";
+
 /// DRIVER_EPHEMERAL_TYPE is the driver for ephemeral volume.
 pub const DRIVER_EPHEMERAL_TYPE: &str = "ephemeral";
 /// DRIVER_LOCAL_TYPE is the driver for local volume.

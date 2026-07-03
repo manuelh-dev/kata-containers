@@ -357,9 +357,10 @@ copy_cdh_runtime_deps() {
 
 	copy_mkfs_ext4_runtime_deps
 
-	# cryptsetup and dd are used by CDH secure_mount.
+	# cryptsetup, veritysetup, and dd are used by CDH secure storage.
 	mkdir -p sbin bin
 	cp -a "${stage_one}/sbin/cryptsetup" sbin/.
+	cp -a "${stage_one}/sbin/veritysetup" sbin/.
 	cp -a "${stage_one}/usr/bin/dd" bin/.
 }
 

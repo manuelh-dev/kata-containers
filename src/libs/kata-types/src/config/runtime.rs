@@ -27,6 +27,9 @@ pub const EMPTYDIR_MODE_BLOCK_ENCRYPTED: &str = "block-encrypted";
 /// EmptyDir mode: plug a block device to be mounted directly in the guest.
 pub const EMPTYDIR_MODE_BLOCK_PLAIN: &str = "block-plain";
 
+/// Experimental manifest-driven confidential raw block-device support.
+pub const EXPERIMENTAL_CONFIDENTIAL_BLOCK_DEVICE: &str = "confidential_block_device";
+
 /// Kata runtime configuration information.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Runtime {

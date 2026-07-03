@@ -66,6 +66,7 @@ default AllowRequestsFailingPolicy := false
 S_NAME_KEY = "io.kubernetes.cri.sandbox-name"
 S_NAMESPACE_KEY = "io.kubernetes.cri.sandbox-namespace"
 CDI_VFIO_ANNOTATION_PREFIX = "cdi.k8s.io/vfio"
+CONFIDENTIAL_VOLUME_ANNOTATION_KEY = "io.katacontainers.volume.confidential-ro"
 VFIO_PCI_ADDRESS_REGEX = "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[01][0-9a-fA-F]\\.[0-7]=[0-9a-fA-F]{2}/[0-9a-fA-F]{2}$"
 
 CreateContainerRequest := {"ops": ops, "allowed": true} if {
@@ -266,10 +267,17 @@ allow_anno_key_value(i_key, i_value, p_container) if {
 allow_anno_key_value(i_key, i_value, p_container) if {
     print("allow_anno_key_value 2: i key =", i_key)
 
+    i_key != CONFIDENTIAL_VOLUME_ANNOTATION_KEY
     some p_key, _ in p_container.OCI.Annotations
     p_key == i_key
 
     print("allow_anno_key_value 2: true")
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+    i_key == CONFIDENTIAL_VOLUME_ANNOTATION_KEY
+    p_container.OCI.Annotations[i_key] == i_value
+
+    print("allow_anno_key_value confidential volume: true")
 }
 allow_anno_key_value(i_key, i_value, p_container) if {
     print("allow_anno_key_value 3: i key =", i_key, "i_value =", i_value)
@@ -503,10 +511,25 @@ allow_volume_devices(p_volume_devices, i_volume_devices) if {
 
     every i_volume_device in i_volume_devices {
         some p_device in p_volume_devices
-        p_device.container_path == i_volume_device.container_path
+        allow_volume_device(p_device, i_volume_device)
     }
 
     print("allow_volume_devices: true")
+}
+
+allow_volume_device(p_device, i_device) if {
+    p_device.container_path == i_device.container_path
+    is_null(p_device.secure_volume)
+    is_null(i_device.secure_volume)
+}
+
+allow_volume_device(p_device, i_device) if {
+    p_device.container_path == i_device.container_path
+    p_device.type == "secure-volume"
+    i_device.type == "secure-volume"
+    p_device.secure_volume.annotation_key == i_device.secure_volume.annotation_key
+    p_device.secure_volume.manifest_uri == i_device.secure_volume.manifest_uri
+    i_device.secure_volume.source_driver in ["blk", "blk-ccw", "mmioblk", "scsi"]
 }
 
 allow_vfio_devices(p_vfio_devices, i_vfio_devices, i_oci) if {

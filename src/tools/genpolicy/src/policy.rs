@@ -28,6 +28,15 @@ use std::fs::read_to_string;
 use std::io::Write;
 use std::process::exit;
 
+const CONFIDENTIAL_VOLUME_ANNOTATION_KEY: &str = "io.katacontainers.volume.confidential-ro";
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ConfidentialVolumeAnnotation {
+    manifest_uri: String,
+    device_path: String,
+}
+
 /// Intermediary format of policy data.
 pub struct AgentPolicy {
     /// K8s resources described by the input YAML file.
@@ -760,6 +769,20 @@ impl AgentPolicy {
 
                 let mut device = agent::Device::new();
                 device.set_container_path(volumeDevice.devicePath.clone());
+                if let Some((annotation_key, confidential)) =
+                    get_confidential_volume_annotation(&annotations, volumeDevice)
+                        .unwrap_or_else(|error| panic!("{error}"))
+                {
+                    device.set_type("secure-volume".to_string());
+                    device.secure_volume =
+                        protobuf::MessageField::some(agent::SecureVolumeDevice {
+                            annotation_key,
+                            manifest_uri: confidential.manifest_uri,
+                            // The shim fills this with the configured block transport driver.
+                            source_driver: String::new(),
+                            ..Default::default()
+                        });
+                }
                 devices.push(device);
 
                 linux.Devices.push(KataLinuxDevice {
@@ -1127,6 +1150,95 @@ impl AgentPolicy {
             &process,
         );
         process
+    }
+}
+
+fn get_confidential_volume_annotation(
+    annotations: &BTreeMap<String, String>,
+    volume_device: &pod::VolumeDevice,
+) -> Result<Option<(String, ConfidentialVolumeAnnotation)>> {
+    let Some(raw_annotation) = annotations.get(CONFIDENTIAL_VOLUME_ANNOTATION_KEY) else {
+        return Ok(None);
+    };
+    let confidential_volumes: BTreeMap<String, ConfidentialVolumeAnnotation> =
+        serde_json::from_str(raw_annotation).map_err(|error| {
+            anyhow::anyhow!(
+                "Invalid confidential volume annotation '{CONFIDENTIAL_VOLUME_ANNOTATION_KEY}': {error}"
+            )
+        })?;
+    let Some(confidential) = confidential_volumes.get(&volume_device.name) else {
+        return Ok(None);
+    };
+    if confidential.device_path != volume_device.devicePath {
+        return Err(anyhow::anyhow!(
+            "Confidential volume '{}' in annotation '{}' selects '{}' but volumeDevice uses '{}'",
+            volume_device.name,
+            CONFIDENTIAL_VOLUME_ANNOTATION_KEY,
+            confidential.device_path,
+            volume_device.devicePath
+        ));
+    }
+    Ok(Some((
+        CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+        confidential.clone(),
+    )))
+}
+
+#[cfg(test)]
+mod confidential_volume_tests {
+    use super::*;
+
+    fn volume_device() -> pod::VolumeDevice {
+        pod::VolumeDevice {
+            name: "block-disk".to_string(),
+            devicePath: "/dev/hostdisk".to_string(),
+        }
+    }
+
+    #[test]
+    fn matches_manifest_annotation_to_volume_device() {
+        let key = CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string();
+        let annotations = BTreeMap::from([(
+            key.clone(),
+            r#"{"block-disk":{"manifestUri":"kbs:///storage/manifest/model-v1","devicePath":"/dev/hostdisk"}}"#
+                .to_string(),
+        )]);
+
+        let (actual_key, confidential) =
+            get_confidential_volume_annotation(&annotations, &volume_device())
+                .unwrap()
+                .unwrap();
+        assert_eq!(actual_key, key);
+        assert_eq!(
+            confidential.manifest_uri,
+            "kbs:///storage/manifest/model-v1"
+        );
+    }
+
+    #[test]
+    fn rejects_annotation_for_a_different_device_path() {
+        let annotations = BTreeMap::from([(
+            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            r#"{"block-disk":{"manifestUri":"kbs:///storage/manifest/model-v1","devicePath":"/dev/other"}}"#
+                .to_string(),
+        )]);
+
+        assert!(get_confidential_volume_annotation(&annotations, &volume_device()).is_err());
+    }
+
+    #[test]
+    fn ignores_unselected_volume() {
+        let annotations = BTreeMap::from([(
+            CONFIDENTIAL_VOLUME_ANNOTATION_KEY.to_string(),
+            r#"{"another-disk":{"manifestUri":"kbs:///storage/manifest/model-v1","devicePath":"/dev/other"}}"#
+                .to_string(),
+        )]);
+
+        assert!(
+            get_confidential_volume_annotation(&annotations, &volume_device())
+                .unwrap()
+                .is_none()
+        );
     }
 }
 

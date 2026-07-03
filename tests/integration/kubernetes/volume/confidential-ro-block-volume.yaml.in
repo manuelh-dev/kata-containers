@@ -1,0 +1,42 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: STORAGE_CLASS
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: PV_NAME
+spec:
+  capacity:
+    storage: 130Mi
+  volumeMode: Block
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: STORAGE_CLASS
+  local:
+    path: LOOP_DEVICE
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - NODE_NAME
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: PVC_NAME
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 130Mi
+  volumeMode: Block
+  storageClassName: STORAGE_CLASS

@@ -26,6 +26,25 @@ message SecureMountRequest {
 
 message SecureMountResponse {}
 
+message ActivateVolumeRequest {
+    string device_id = 1;
+
+    oneof configuration_source {
+        string manifest_uri = 2;
+    }
+}
+
+message ActivateVolumeResponse {
+    string activation_id = 1;
+    string device_path = 2;
+}
+
+message DeactivateVolumeRequest {
+    string activation_id = 1;
+}
+
+message DeactivateVolumeResponse {}
+
 message ImagePullRequest {
     // - `image_url`: The reference of the image to pull
     string image_url = 1;
@@ -47,6 +66,11 @@ service SealedSecretService {
 
 service SecureMountService {
     rpc SecureMount(SecureMountRequest) returns (SecureMountResponse) {};
+}
+
+service SecureVolumeService {
+    rpc ActivateVolume(ActivateVolumeRequest) returns (ActivateVolumeResponse) {};
+    rpc DeactivateVolume(DeactivateVolumeRequest) returns (DeactivateVolumeResponse) {};
 }
 
 message GetResourceRequest {

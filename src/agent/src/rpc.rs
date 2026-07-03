@@ -214,6 +214,18 @@ impl AgentService {
         &self,
         req: protocols::agent::CreateContainerRequest,
     ) -> Result<()> {
+        let cid = req.container_id.clone();
+        let result = self.do_create_container_inner(req).await;
+        if result.is_err() {
+            deactivate_container_secure_volumes(&mut *self.sandbox.lock().await, &cid).await;
+        }
+        result
+    }
+
+    async fn do_create_container_inner(
+        &self,
+        req: protocols::agent::CreateContainerRequest,
+    ) -> Result<()> {
         // create the proc_io first, in case there's some error occur below, thus we can make sure
         // the io stream closed when error occur.
         let proc_io = if AGENT_CONFIG.passfd_listener_port != 0 {
@@ -2124,11 +2136,30 @@ async fn remove_container_resources(sandbox: &mut Sandbox, cid: &str) -> Result<
         let _ = verity_devices;
     }
 
+    deactivate_container_secure_volumes(sandbox, cid).await;
+
     sandbox.container_mounts.remove(cid);
     sandbox.containers.remove(cid);
     // Remove any host -> guest mappings for this container
     sandbox.pcimap.remove(cid);
     Ok(())
+}
+
+async fn deactivate_container_secure_volumes(sandbox: &mut Sandbox, cid: &str) {
+    let Some(activation_ids) = sandbox.container_secure_volume_activations.remove(cid) else {
+        return;
+    };
+    for activation_id in activation_ids.into_iter().rev() {
+        if let Err(error) = confidential_data_hub::deactivate_volume(&activation_id).await {
+            error!(
+                sandbox.logger,
+                "failed to deactivate confidential volume";
+                "container_id" => cid,
+                "activation_id" => activation_id,
+                "error" => format!("{error:#}"),
+            );
+        }
+    }
 }
 
 fn append_guest_hooks(s: &Sandbox, oci: &mut Spec) -> Result<()> {

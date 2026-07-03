@@ -199,9 +199,14 @@ impl ResourceManager {
         inner.handler_volumes(cid, spec).await
     }
 
-    pub async fn handler_devices(&self, cid: &str, linux: &Linux) -> Result<Vec<ContainerDevice>> {
+    pub async fn handler_devices(
+        &self,
+        cid: &str,
+        linux: &Linux,
+        annotations: &HashMap<String, String>,
+    ) -> Result<Vec<ContainerDevice>> {
         let inner = self.inner.read().await;
-        inner.handler_devices(cid, linux).await
+        inner.handler_devices(cid, linux, annotations).await
     }
 
     pub async fn dump(&self) {

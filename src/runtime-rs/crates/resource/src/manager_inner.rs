@@ -6,7 +6,10 @@
 
 use std::{collections::HashMap, sync::Arc, thread};
 
-use agent::{types::Device, ARPNeighbor, Agent, OnlineCPUMemRequest, Storage};
+use agent::{
+    types::{Device, SecureVolumeDevice},
+    ARPNeighbor, Agent, OnlineCPUMemRequest, Storage,
+};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use hypervisor::{
@@ -23,8 +26,10 @@ use hypervisor::{
 };
 use kata_types::mount::{kata_guest_sandbox_dir, Mount, KATA_EPHEMERAL_VOLUME_TYPE, SHM_DIR};
 use kata_types::{
-    config::{hypervisor::TopologyConfigInfo, TomlConfig},
-    device::DRIVER_VFIO_AP_COLD_TYPE,
+    annotations::CONTAINER_TYPE_KEY,
+    config::{hypervisor::TopologyConfigInfo, TomlConfig, EXPERIMENTAL_CONFIDENTIAL_BLOCK_DEVICE},
+    container::POD_SANDBOX,
+    device::{DRIVER_SECURE_VOLUME_TYPE, DRIVER_VFIO_AP_COLD_TYPE},
     mount::{adjust_rootfs_mounts, KATA_IMAGE_FORCE_GUEST_PULL},
 };
 use libc::NUD_PERMANENT;
@@ -503,13 +508,35 @@ impl ResourceManagerInner {
             sid: &self.sid,
             agent: self.agent.clone(),
             emptydir_mode: &self.toml_config.runtime.emptydir_mode,
-            fs_sharing_supported: self.hypervisor.capabilities().await?.is_fs_sharing_supported(),
+            fs_sharing_supported: self
+                .hypervisor
+                .capabilities()
+                .await?
+                .is_fs_sharing_supported(),
         };
         self.volume_resource.handler_volumes(&ctx, cid, spec).await
     }
 
-    pub async fn handler_devices(&self, _cid: &str, linux: &Linux) -> Result<Vec<ContainerDevice>> {
+    pub async fn handler_devices(
+        &self,
+        _cid: &str,
+        linux: &Linux,
+        annotations: &HashMap<String, String>,
+    ) -> Result<Vec<ContainerDevice>> {
         let mut devices = vec![];
+        let mut confidential_volumes = if annotations
+            .get(CONTAINER_TYPE_KEY)
+            .is_some_and(|container_type| container_type == POD_SANDBOX)
+        {
+            HashMap::new()
+        } else {
+            crate::secure_volume::parse_annotations(
+                annotations,
+                self.toml_config
+                    .runtime
+                    .is_experiment_enabled(EXPERIMENTAL_CONFIDENTIAL_BLOCK_DEVICE),
+            )?
+        };
 
         // Build a map of host_bdf -> Option<guest_pci_path> for cold-plugged
         // physical (VFIO) network endpoints.  When a VFIO char device in the
@@ -544,6 +571,8 @@ impl ResourceManagerInner {
         for d in linux_devices.iter() {
             match d.typ() {
                 LinuxDeviceType::B => {
+                    let container_path = d.path().display().to_string();
+                    let confidential_volume = confidential_volumes.remove(&container_path);
                     let blkdev_info = get_block_device_info(&self.device_manager).await;
                     // Read-only intent comes from the cgroup device access rule.
                     // Also honor the host device's own read-only flag (BLKROGET):
@@ -556,6 +585,11 @@ impl ResourceManagerInner {
                         d.major(),
                         d.minor(),
                     ) || block_device_node_is_readonly(d.major(), d.minor());
+                    if confidential_volume.is_some() && !is_readonly {
+                        anyhow::bail!(
+                            "confidential block device {container_path} must be attached read-only"
+                        );
+                    }
                     let dev_info = DeviceConfig::BlockCfg(BlockConfig {
                         major: d.major(),
                         minor: d.minor(),
@@ -577,6 +611,7 @@ impl ResourceManagerInner {
                     // The device ID is derived from the available address: PCI, SCSI,
                     // CCW, or virtual path, depending on the driver and configuration.
                     if let DeviceType::Block(device) = device_info {
+                        let source_driver = device.config.driver_option.clone();
                         let id = if let Some(pci_path) = device.config.pci_path {
                             pci_path.to_string()
                         } else if let Some(scsi_address) = device.config.scsi_addr {
@@ -587,11 +622,23 @@ impl ResourceManagerInner {
                             device.config.virt_path.clone()
                         };
 
+                        let (field_type, secure_volume) = match confidential_volume {
+                            Some(volume) => (
+                                DRIVER_SECURE_VOLUME_TYPE.to_string(),
+                                Some(SecureVolumeDevice {
+                                    annotation_key: volume.annotation_key,
+                                    manifest_uri: volume.manifest_uri,
+                                    source_driver,
+                                }),
+                            ),
+                            None => (source_driver, None),
+                        };
                         let agent_device = Device {
                             id,
-                            container_path: d.path().display().to_string().clone(),
-                            field_type: device.config.driver_option,
+                            container_path,
+                            field_type,
                             vm_path: device.config.virt_path,
+                            secure_volume,
                             ..Default::default()
                         };
                         devices.push(ContainerDevice {

@@ -530,6 +530,15 @@ message Storage {
 
 // Device represents only the devices that could have been defined through the
 // Linux Device list of the OCI specification.
+message SecureVolumeDevice {
+	// Exact workload annotation authorizing this device.
+	string annotation_key = 1;
+	// Trustee/KBS manifest URI passed to CDH.
+	string manifest_uri = 2;
+	// Original block driver used to locate the attached guest device.
+	string source_driver = 3;
+}
+
 message Device {
 	// Id can be used to identify the device inside the VM. Some devices
 	// might not need it to be identified on the VM, and will rely on the
@@ -562,6 +571,8 @@ message Device {
 	// sizes, numbers of luns, ... which are very specific to every device
 	// and cannot be generalized through extra fields.
 	repeated string options = 5;
+	// Secure-volume metadata. When present, Type must be "secure-volume".
+	SecureVolumeDevice secure_volume = 6;
 }
 
 message StringUser {

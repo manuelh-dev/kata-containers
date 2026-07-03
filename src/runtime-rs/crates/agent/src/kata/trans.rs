@@ -22,11 +22,11 @@ use crate::{
         MemHotplugByProbeRequest, MemoryData, MemoryStats, MetricsResponse, NetworkStats,
         OnlineCPUMemRequest, PidsStats, ReadStreamRequest, ReadStreamResponse,
         RemoveContainerRequest, ReseedRandomDevRequest, ResizeVolumeRequest, Route, Routes,
-        SetGuestDateTimeRequest, SetIPTablesRequest, SetIPTablesResponse, SharedMount,
-        SignalProcessRequest, StatsContainerResponse, Storage, StringUser, ThrottlingData,
-        TtyWinResizeRequest, UpdateContainerRequest, UpdateInterfaceRequest, UpdateRoutesRequest,
-        VersionCheckResponse, VolumeStatsRequest, VolumeStatsResponse, WaitProcessRequest,
-        WriteStreamRequest,
+        SecureVolumeDevice, SetGuestDateTimeRequest, SetIPTablesRequest, SetIPTablesResponse,
+        SharedMount, SignalProcessRequest, StatsContainerResponse, Storage, StringUser,
+        ThrottlingData, TtyWinResizeRequest, UpdateContainerRequest, UpdateInterfaceRequest,
+        UpdateRoutesRequest, VersionCheckResponse, VolumeStatsRequest, VolumeStatsResponse,
+        WaitProcessRequest, WriteStreamRequest,
     },
     GetDiagnosticDataRequest, GetDiagnosticDataResponse, GetGuestDetailsRequest, OomEventResponse,
     SetPolicyRequest, WaitProcessResponse, WriteStreamResponse,
@@ -99,6 +99,18 @@ impl From<Device> for agent::Device {
             vm_path: from.vm_path,
             container_path: from.container_path,
             options: trans_vec(from.options),
+            secure_volume: from_option(from.secure_volume),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<SecureVolumeDevice> for agent::SecureVolumeDevice {
+    fn from(from: SecureVolumeDevice) -> Self {
+        Self {
+            annotation_key: from.annotation_key,
+            manifest_uri: from.manifest_uri,
+            source_driver: from.source_driver,
             ..Default::default()
         }
     }

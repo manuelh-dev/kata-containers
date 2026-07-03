@@ -43,12 +43,20 @@ pub struct StringUser {
 }
 
 #[derive(PartialEq, Clone, Debug, Default)]
+pub struct SecureVolumeDevice {
+    pub annotation_key: String,
+    pub manifest_uri: String,
+    pub source_driver: String,
+}
+
+#[derive(PartialEq, Clone, Debug, Default)]
 pub struct Device {
     pub id: String,
     pub field_type: String,
     pub vm_path: String,
     pub container_path: String,
     pub options: Vec<String>,
+    pub secure_volume: Option<SecureVolumeDevice>,
 }
 
 #[derive(Debug, PartialEq, Clone, Default)]

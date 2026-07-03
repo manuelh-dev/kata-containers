@@ -220,6 +220,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdx".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
             ContainerDevice {
@@ -266,6 +267,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdyx".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
         ];
@@ -301,6 +303,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdx".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
             ContainerDevice {
@@ -359,6 +362,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdyx".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
         ];
@@ -394,6 +398,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdx".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
             ContainerDevice {
@@ -404,6 +409,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/vdy".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
             ContainerDevice {
@@ -414,6 +420,7 @@ mod tests {
                     field_type: "virtio-blk".to_string(),
                     vm_path: "/dev/zvdz".to_string(),
                     options: vec![],
+                    secure_volume: None,
                 },
             },
         ];

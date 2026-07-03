@@ -17,7 +17,7 @@ use protocols::{
     confidential_data_hub_ttrpc_async,
     confidential_data_hub_ttrpc_async::{
         GetResourceServiceClient, ImagePullServiceClient, SealedSecretServiceClient,
-        SecureMountServiceClient,
+        SecureMountServiceClient, SecureVolumeServiceClient,
     },
 };
 use safe_path::scoped_join;
@@ -47,6 +47,8 @@ pub struct CDHClient {
     #[derivative(Debug = "ignore")]
     secure_mount_client: SecureMountServiceClient,
     #[derivative(Debug = "ignore")]
+    secure_volume_client: SecureVolumeServiceClient,
+    #[derivative(Debug = "ignore")]
     get_resource_client: GetResourceServiceClient,
     #[derivative(Debug = "ignore")]
     image_pull_client: ImagePullServiceClient,
@@ -61,11 +63,14 @@ impl CDHClient {
             confidential_data_hub_ttrpc_async::ImagePullServiceClient::new(client.clone());
         let secure_mount_client =
             confidential_data_hub_ttrpc_async::SecureMountServiceClient::new(client.clone());
+        let secure_volume_client =
+            confidential_data_hub_ttrpc_async::SecureVolumeServiceClient::new(client.clone());
         let get_resource_client =
             confidential_data_hub_ttrpc_async::GetResourceServiceClient::new(client);
         Ok(CDHClient {
             sealed_secret_client,
             secure_mount_client,
+            secure_volume_client,
             get_resource_client,
             image_pull_client,
         })
@@ -121,6 +126,40 @@ impl CDHClient {
             )
             .await?;
         Ok(res.Resource)
+    }
+
+    pub async fn activate_volume(
+        &self,
+        device_id: &str,
+        manifest_uri: &str,
+    ) -> Result<(String, String)> {
+        let mut req = confidential_data_hub::ActivateVolumeRequest {
+            device_id: device_id.to_string(),
+            ..Default::default()
+        };
+        req.set_manifest_uri(manifest_uri.to_string());
+        let response = self
+            .secure_volume_client
+            .activate_volume(
+                ttrpc::context::with_timeout(AGENT_CONFIG.cdh_api_timeout.as_nanos() as i64),
+                &req,
+            )
+            .await?;
+        Ok((response.activation_id, response.device_path))
+    }
+
+    pub async fn deactivate_volume(&self, activation_id: &str) -> Result<()> {
+        let req = confidential_data_hub::DeactivateVolumeRequest {
+            activation_id: activation_id.to_string(),
+            ..Default::default()
+        };
+        self.secure_volume_client
+            .deactivate_volume(
+                ttrpc::context::with_timeout(AGENT_CONFIG.cdh_api_timeout.as_nanos() as i64),
+                &req,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn pull_image(&self, image: &str, bundle_path: &str) -> Result<()> {
@@ -289,6 +328,20 @@ pub async fn secure_mount(
         .secure_mount(volume_type, options, flags, mount_point)
         .await?;
     Ok(())
+}
+
+pub async fn activate_volume(device_id: &str, manifest_uri: &str) -> Result<(String, String)> {
+    let cdh_client = CDH_CLIENT
+        .get()
+        .context("Confidential Data Hub not initialized")?;
+    cdh_client.activate_volume(device_id, manifest_uri).await
+}
+
+pub async fn deactivate_volume(activation_id: &str) -> Result<()> {
+    let cdh_client = CDH_CLIENT
+        .get()
+        .context("Confidential Data Hub not initialized")?;
+    cdh_client.deactivate_volume(activation_id).await
 }
 
 #[allow(dead_code)]
