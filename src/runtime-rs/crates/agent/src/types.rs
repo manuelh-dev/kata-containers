@@ -47,6 +47,7 @@ pub struct SecureVolumeDevice {
     pub annotation_key: String,
     pub manifest_uri: String,
     pub source_driver: String,
+    pub read_only: bool,
 }
 
 #[derive(PartialEq, Clone, Debug, Default)]

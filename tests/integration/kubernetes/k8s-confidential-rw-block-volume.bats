@@ -25,22 +25,22 @@ setup() {
 	esac
 
 	test_id="${BATS_TEST_NUMBER}-$$"
-	pod_name="confidential-ro-volume-${test_id}"
-	storage_class="confidential-ro-${test_id}"
-	pv_name="confidential-ro-pv-${test_id}"
-	pvc_name="confidential-ro-pvc-${test_id}"
-	resource_tag="confidential-ro-${test_id}"
+	pod_name="confidential-rw-volume-${test_id}"
+	storage_class="confidential-rw-${test_id}"
+	pv_name="confidential-rw-pv-${test_id}"
+	pvc_name="confidential-rw-pvc-${test_id}"
+	resource_tag="confidential-rw-${test_id}"
 	runtime_class="kata-${KATA_HYPERVISOR}"
-	host_work_dir="/tmp/kata-confidential-ro-${test_id}"
+	host_work_dir="/tmp/kata-confidential-rw-${test_id}"
 	volume_image="${host_work_dir}/volume.img"
-	hash_image="${host_work_dir}/hash.img"
 	key_file="${host_work_dir}/key.bin"
-	mapper_name="kata-confidential-ro-${test_id}"
+	mapper_name="kata-confidential-rw-${test_id}"
 	loop_device=""
-	luks_uuid="11111111-2222-3333-4444-555555555555"
+	luks_uuid="22222222-3333-4444-5555-666666666666"
+	header_length_bytes=16777216
 
-	infra_yaml="$(mktemp --tmpdir confidential-ro-infra.XXXXXX.yaml)"
-	pod_yaml="$(mktemp --tmpdir confidential-ro-pod.XXXXXX.yaml)"
+	infra_yaml="$(mktemp --tmpdir confidential-rw-infra.XXXXXX.yaml)"
+	pod_yaml="$(mktemp --tmpdir confidential-rw-pod.XXXXXX.yaml)"
 	policy_settings_dir="$(create_tmp_policy_settings_dir "${pod_config_dir}")"
 
 	prepare_confidential_volume
@@ -75,32 +75,26 @@ exec_host_volume() {
 
 prepare_confidential_volume() {
 	exec_host_volume "${node}" "sudo rm -rf '${host_work_dir}' && sudo install -d -m 0700 '${host_work_dir}/mnt'"
-	exec_host_volume "${node}" sudo truncate -s 128M "${volume_image}"
+	exec_host_volume "${node}" sudo truncate -s 256M "${volume_image}"
 	exec_host_volume "${node}" sudo openssl rand -out "${key_file}" 32
 	exec_host_volume "${node}" sudo chmod 0600 "${key_file}"
 	exec_host_volume "${node}" sudo cryptsetup --disable-locks luksFormat --batch-mode --type luks2 \
-		--uuid "${luks_uuid}" --key-file "${key_file}" "${volume_image}"
+		--uuid "${luks_uuid}" --sector-size 4096 \
+		--integrity hmac-sha256 \
+		--key-file "${key_file}" "${volume_image}"
 	exec_host_volume "${node}" sudo cryptsetup --disable-locks open --type luks2 --key-file "${key_file}" \
 		"${volume_image}" "${mapper_name}"
-	exec_host_volume "${node}" sudo mkfs.ext4 -F -L confidential-model "/dev/mapper/${mapper_name}"
+	exec_host_volume "${node}" sudo mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 \
+		-L confidential-model "/dev/mapper/${mapper_name}"
 	exec_host_volume "${node}" sudo mount "/dev/mapper/${mapper_name}" "${host_work_dir}/mnt"
 	exec_host_volume "${node}" "echo confidential-volume-e2e-ok | sudo tee '${host_work_dir}/mnt/model.txt' >/dev/null"
-	exec_host_volume "${node}" sudo chmod 0444 "${host_work_dir}/mnt/model.txt"
 	exec_host_volume "${node}" sudo sync
 	exec_host_volume "${node}" sudo umount "${host_work_dir}/mnt"
 	exec_host_volume "${node}" sudo cryptsetup --disable-locks close "${mapper_name}"
 
-	exec_host_volume "${node}" sudo truncate -s 2M "${hash_image}"
-	verity_output="$(exec_host_volume "${node}" sudo veritysetup format --no-superblock \
-		--data-block-size 4096 --hash-block-size 4096 "${volume_image}" "${hash_image}")"
-	root_hash="$(awk '/Root hash:/ {print $3}' <<<"${verity_output}" | tr -d '\r')"
-	salt="$(awk '/Salt:/ {print $2}' <<<"${verity_output}" | tr -d '\r')"
-	data_blocks="$(awk '/Data blocks:/ {print $3}' <<<"${verity_output}" | tr -d '\r')"
-	[[ -n "${root_hash}" && -n "${salt}" && -n "${data_blocks}" ]]
-
-	exec_host_volume "${node}" sudo truncate -s 130M "${volume_image}"
-	exec_host_volume "${node}" "sudo dd if='${hash_image}' of='${volume_image}' bs=4096 seek='${data_blocks}' conv=notrunc status=none"
-	loop_device="$(exec_host_volume "${node}" sudo losetup --find --show --read-only "${volume_image}" | tr -d '\r\n')"
+	header_sha256="$(exec_host_volume "${node}" "sudo dd if='${volume_image}' bs=1 count='${header_length_bytes}' status=none | sha256sum | awk '{print \$1}'" | tr -d '\r\n')"
+	[[ -n "${header_sha256}" ]]
+	loop_device="$(exec_host_volume "${node}" sudo losetup --find --show "${volume_image}" | tr -d '\r\n')"
 }
 
 configure_kbs_resources() {
@@ -111,10 +105,9 @@ configure_kbs_resources() {
 	manifest="$(jq -cn \
 		--arg key_uri "kbs:///kata-ci/storage-key/${resource_tag}" \
 		--arg luks_uuid "${luks_uuid}" \
-		--arg root_hash "${root_hash}" \
-		--arg salt "${salt}" \
-		--argjson data_blocks "${data_blocks}" \
-		'{schemaVersion:1,volumeId:"model-data",volumeVersion:"v1",protection:{type:"luks2-verity-ro",keyUri:$key_uri,luksUuid:$luks_uuid,verity:{algorithm:"sha256",rootHash:$root_hash,salt:$salt,dataBlockSize:4096,hashBlockSize:4096,dataBlocks:$data_blocks}}}')"
+		--arg header_sha256 "${header_sha256}" \
+		--argjson header_length_bytes "${header_length_bytes}" \
+		'{schemaVersion:1,volumeId:"model-data",volumeVersion:"v1",protection:{type:"luks2-integrity-rw",keyUri:$key_uri,luksUuid:$luks_uuid,header:{algorithm:"sha256",offsetBytes:0,lengthBytes:$header_length_bytes,sha256:$header_sha256}}}')"
 	kbs_set_resource "kata-ci" "storage-manifest" "${resource_tag}" "${manifest}"
 }
 
@@ -133,25 +126,25 @@ write_test_manifests() {
 		-e "s|RUNTIME_CLASS|${runtime_class}|g" \
 		-e "s|KBS_ADDRESS|$(kbs_k8s_svc_http_addr)|g" \
 		-e "s|MANIFEST_URI|kbs:///kata-ci/storage-manifest/${resource_tag}|g" \
-		"${BATS_TEST_DIRNAME}/runtimeclass_workloads/pod-confidential-ro-block-volume.yaml.in" >"${pod_yaml}"
+		"${BATS_TEST_DIRNAME}/runtimeclass_workloads/pod-confidential-rw-block-volume.yaml.in" >"${pod_yaml}"
 }
 
-@test "confidential read-only block volume is activated and readable" {
+@test "confidential read-write block volume is activated and writable" {
 	kubectl create -f "${pod_yaml}"
 	kubectl wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s "pod/${pod_name}"
 }
 
-@test "confidential read-only block volume rejects corrupted ciphertext" {
+@test "confidential read-write block volume rejects corrupted LUKS header" {
 	exec_host_volume "${node}" sudo losetup -d "${loop_device}"
 	exec_host_volume "${node}" "sudo dd if=/dev/zero of='${volume_image}' bs=1 count=6 seek=0 conv=notrunc status=none"
-	exec_host_volume "${node}" sudo losetup --read-only "${loop_device}" "${volume_image}"
+	exec_host_volume "${node}" sudo losetup "${loop_device}" "${volume_image}"
 
 	kubectl create -f "${pod_yaml}"
 	cmd="kubectl get pod '${pod_name}' -o jsonpath='{.status.containerStatuses[0].state}' | grep -q StartError"
 	waitForProcess 180 3 "${cmd}"
 	run bash -c "kubectl get pod '${pod_name}' -o json | jq -r '.status.containerStatuses[0].state | .terminated.message // .waiting.message // \"\"'"
 	[[ "${status}" -eq 0 ]]
-	[[ "${output}" == *"activate confidential block device"* ]]
+	[[ "${output}" == *"authenticated LUKS header digest mismatch"* ]]
 }
 
 teardown() {

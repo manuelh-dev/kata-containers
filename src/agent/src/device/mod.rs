@@ -218,12 +218,17 @@ pub async fn add_devices(
                         }
 
                         // Update cgroup to allow all devices added to guest.
-                        let access =
-                            if device.type_ == kata_types::device::DRIVER_SECURE_VOLUME_TYPE {
-                                "r"
-                            } else {
-                                "rwm"
-                            };
+                        let access = if device.type_
+                            == kata_types::device::DRIVER_SECURE_VOLUME_TYPE
+                            && device
+                                .secure_volume
+                                .as_ref()
+                                .is_some_and(|secure| secure.read_only)
+                        {
+                            "r"
+                        } else {
+                            "rwm"
+                        };
                         insert_devices_cgroup_rule(logger, spec, &dev_update.info, true, access)
                             .context("Update device cgroup")?;
                     }

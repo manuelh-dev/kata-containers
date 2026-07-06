@@ -404,6 +404,10 @@ coco_guest_components() {
 	cp -a "${stage_one}/${pause_dir}"/rootfs/pause "${pause_dir}/rootfs/."
 
 	copy_cdh_runtime_deps
+
+	if [[ -n "${COCO_GUEST_COMPONENTS_TARBALL:-}" ]]; then
+		tar --zstd -xf "${COCO_GUEST_COMPONENTS_TARBALL}" -C .
+	fi
 }
 
 setup_nvidia_gpu_rootfs_stage_two() {

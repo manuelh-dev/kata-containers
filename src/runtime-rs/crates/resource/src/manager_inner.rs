@@ -585,11 +585,6 @@ impl ResourceManagerInner {
                         d.major(),
                         d.minor(),
                     ) || block_device_node_is_readonly(d.major(), d.minor());
-                    if confidential_volume.is_some() && !is_readonly {
-                        anyhow::bail!(
-                            "confidential block device {container_path} must be attached read-only"
-                        );
-                    }
                     let dev_info = DeviceConfig::BlockCfg(BlockConfig {
                         major: d.major(),
                         minor: d.minor(),
@@ -629,6 +624,7 @@ impl ResourceManagerInner {
                                     annotation_key: volume.annotation_key,
                                     manifest_uri: volume.manifest_uri,
                                     source_driver,
+                                    read_only: is_readonly,
                                 }),
                             ),
                             None => (source_driver, None),

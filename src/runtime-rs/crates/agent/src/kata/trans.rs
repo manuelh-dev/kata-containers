@@ -111,6 +111,7 @@ impl From<SecureVolumeDevice> for agent::SecureVolumeDevice {
             annotation_key: from.annotation_key,
             manifest_uri: from.manifest_uri,
             source_driver: from.source_driver,
+            read_only: from.read_only,
             ..Default::default()
         }
     }

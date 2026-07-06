@@ -537,6 +537,8 @@ message SecureVolumeDevice {
 	string manifest_uri = 2;
 	// Original block driver used to locate the attached guest device.
 	string source_driver = 3;
+	// Whether the activated secure-volume mapper should be exposed read-only.
+	bool read_only = 4;
 }
 
 message Device {
