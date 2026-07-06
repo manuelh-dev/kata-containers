@@ -66,7 +66,7 @@ default AllowRequestsFailingPolicy := false
 S_NAME_KEY = "io.kubernetes.cri.sandbox-name"
 S_NAMESPACE_KEY = "io.kubernetes.cri.sandbox-namespace"
 CDI_VFIO_ANNOTATION_PREFIX = "cdi.k8s.io/vfio"
-CONFIDENTIAL_VOLUME_ANNOTATION_KEY = "io.katacontainers.volume.confidential-ro"
+CONFIDENTIAL_VOLUME_ANNOTATION_KEY = "io.katacontainers.volume.confidential"
 VFIO_PCI_ADDRESS_REGEX = "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[01][0-9a-fA-F]\\.[0-7]=[0-9a-fA-F]{2}/[0-9a-fA-F]{2}$"
 
 CreateContainerRequest := {"ops": ops, "allowed": true} if {

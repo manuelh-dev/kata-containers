@@ -4,7 +4,7 @@ metadata:
   name: POD_NAME
   annotations:
     io.katacontainers.config.hypervisor.kernel_params: "agent.aa_kbc_params=cc_kbc::KBS_ADDRESS"
-    io.katacontainers.volume.confidential-ro: '{"block-disk":{"manifestUri":"MANIFEST_URI","devicePath":"/dev/hostdisk"}}'
+    io.katacontainers.volume.confidential: '{"block-disk":{"manifestUri":"MANIFEST_URI","devicePath":"/dev/hostdisk"}}'
 spec:
   runtimeClassName: RUNTIME_CLASS
   restartPolicy: Never
