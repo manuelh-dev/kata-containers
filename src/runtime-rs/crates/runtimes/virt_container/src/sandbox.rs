@@ -87,7 +87,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use strum::Display;
-use tokio::sync::{mpsc::Sender, watch, Mutex, RwLock};
+use tokio::sync::{mpsc::Sender, watch, Mutex, MutexGuard, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -119,11 +119,6 @@ struct SandboxInner {
     state: SandboxState,
     exit_info: Option<SandboxExitInfo>,
     created_at: Option<SystemTime>,
-    // Whether sandbox resources (cgroup, network, mounts, ...) have already
-    // been released.  Teardown can be driven both by the sandbox container
-    // exiting and by an explicit shutdown RPC, so guard against running the
-    // cleanup twice.
-    cleaned: bool,
 }
 
 impl SandboxInner {
@@ -132,8 +127,33 @@ impl SandboxInner {
             state: SandboxState::Init,
             exit_info: None,
             created_at: None,
-            cleaned: false,
         }
+    }
+}
+
+#[derive(Default)]
+struct CleanupCoordinator {
+    completed: Mutex<bool>,
+}
+
+impl CleanupCoordinator {
+    async fn begin(&self) -> Option<CleanupPermit<'_>> {
+        let completed = self.completed.lock().await;
+        if *completed {
+            None
+        } else {
+            Some(CleanupPermit { completed })
+        }
+    }
+}
+
+struct CleanupPermit<'a> {
+    completed: MutexGuard<'a, bool>,
+}
+
+impl CleanupPermit<'_> {
+    fn complete(mut self) {
+        *self.completed = true;
     }
 }
 
@@ -142,6 +162,7 @@ pub struct VirtSandbox {
     sid: String,
     msg_sender: Arc<Mutex<Sender<Message>>>,
     inner: Arc<RwLock<SandboxInner>>,
+    cleanup_coordinator: Arc<CleanupCoordinator>,
     resource_manager: Arc<ResourceManager>,
     agent: Arc<dyn Agent>,
     hypervisor: Arc<dyn Hypervisor>,
@@ -188,6 +209,7 @@ impl VirtSandbox {
             sid: sid.to_string(),
             msg_sender: Arc::new(Mutex::new(msg_sender)),
             inner: Arc::new(RwLock::new(SandboxInner::new())),
+            cleanup_coordinator: Arc::new(CleanupCoordinator::default()),
             agent,
             hypervisor,
             resource_manager,
@@ -1370,14 +1392,11 @@ impl Sandbox for VirtSandbox {
 
     async fn cleanup(&self) -> Result<()> {
         // Teardown may be triggered both when the sandbox container exits and
-        // by a later shutdown RPC; only release the resources once.
-        {
-            let mut inner = self.inner.write().await;
-            if inner.cleaned {
-                return Ok(());
-            }
-            inner.cleaned = true;
-        }
+        // by a later shutdown RPC. Wait for an in-progress cleanup and only
+        // consider it complete after all cleanup stages have finished.
+        let Some(cleanup_permit) = self.cleanup_coordinator.begin().await else {
+            return Ok(());
+        };
 
         let rootless_uid = self
             .hypervisor
@@ -1410,6 +1429,8 @@ impl Sandbox for VirtSandbox {
                 );
             }
         }
+
+        cleanup_permit.complete();
 
         // TODO: cleanup other sandbox resource
         Ok(())
@@ -1661,6 +1682,7 @@ impl Persist for VirtSandbox {
             sid: sid.to_string(),
             msg_sender: Arc::new(Mutex::new(sandbox_args.sender)),
             inner: Arc::new(RwLock::new(SandboxInner::new())),
+            cleanup_coordinator: Arc::new(CleanupCoordinator::default()),
             agent,
             hypervisor,
             resource_manager,
@@ -1671,5 +1693,35 @@ impl Persist for VirtSandbox {
             factory: None,
             cancel_token: CancellationToken::default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CleanupCoordinator;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn cleanup_waits_and_retries_after_interrupted_attempt() {
+        let coordinator = Arc::new(CleanupCoordinator::default());
+        let first_attempt = coordinator.begin().await.unwrap();
+
+        let second_coordinator = coordinator.clone();
+        let second_attempt =
+            tokio::spawn(async move { second_coordinator.begin().await.is_some() });
+
+        tokio::task::yield_now().await;
+        assert!(!second_attempt.is_finished());
+
+        drop(first_attempt);
+        assert!(second_attempt.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn cleanup_skips_attempt_after_completion() {
+        let coordinator = CleanupCoordinator::default();
+        coordinator.begin().await.unwrap().complete();
+
+        assert!(coordinator.begin().await.is_none());
     }
 }
