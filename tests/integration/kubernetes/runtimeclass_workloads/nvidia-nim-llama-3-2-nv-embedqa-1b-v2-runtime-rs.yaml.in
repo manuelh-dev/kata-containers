@@ -10,6 +10,8 @@ metadata:
   labels:
     app: ${POD_NAME_EMBEDQA}
 spec:
+  # The startup wrapper mounts the persistent block device as root and then
+  # drops back to the NIM image's uid/gid before launching its normal command.
   securityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -23,6 +25,20 @@ spec:
   - name: ${POD_NAME_EMBEDQA}
     image: nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2:1.10.1
     imagePullPolicy: IfNotPresent
+    command:
+      - /bin/sh
+      - -ec
+    args:
+      - |
+        mount -t ext4 -o noatime /dev/nim-cache /opt/nim/.cache
+        chown 1000:1000 /dev/nvidia* /dev/dri/* 2>/dev/null || true
+        exec setpriv --reuid=1000 --regid=1000 --init-groups \
+          /opt/nvidia/nvidia_entrypoint.sh /opt/nim/start_server.sh
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      capabilities:
+        add: ["SYS_ADMIN"]
     env:
       - name: NIM_CACHE_PATH
         value: "/opt/nim/.cache"
@@ -77,14 +93,14 @@ spec:
         cpu: "16"
         memory: "24Gi"
 
-    volumeMounts:
+    volumeDevices:
       - name: nim-cache
-        mountPath: /opt/nim/.cache
+        devicePath: /dev/nim-cache
 
   volumes:
   - name: nim-cache
-    emptyDir:
-      sizeLimit: 40Gi
+    persistentVolumeClaim:
+      claimName: nim-cache-block-pvc-embedqa
 ---
 apiVersion: v1
 kind: Secret

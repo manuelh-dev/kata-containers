@@ -14,6 +14,11 @@ export KATA_HYPERVISOR="${KATA_HYPERVISOR:-qemu-nvidia-gpu-runtime-rs}"
 export LOCAL_NIM_CACHE="/opt/nim/.cache"
 
 SKIP_MULTI_GPU_TESTS=${SKIP_MULTI_GPU_TESTS:-false}
+NIM_CACHE_RESET=${NIM_CACHE_RESET:-false}
+NIM_CACHE_INSTRUCT_BACKING_FILE=${NIM_CACHE_INSTRUCT_BACKING_FILE:-/tmp/nim-cache-instruct.img}
+NIM_CACHE_EMBEDQA_BACKING_FILE=${NIM_CACHE_EMBEDQA_BACKING_FILE:-/tmp/nim-cache-embedqa.img}
+NIM_CACHE_INSTRUCT_SIZE_MIB=${NIM_CACHE_INSTRUCT_SIZE_MIB:-65536}
+NIM_CACHE_EMBEDQA_SIZE_MIB=${NIM_CACHE_EMBEDQA_SIZE_MIB:-40960}
 
 TEE=false
 if is_confidential_gpu_hardware; then
@@ -40,8 +45,9 @@ if [[ "${TEE}" = "true" ]]; then
 fi
 if [[ "${TEE}" = "true" ]] || is_runtime_rs; then
     NIM_CONTAINER_START_TIMEOUT_PREDEFINED=420s
-    # These variants keep the model cache in an emptyDir, so every run pays for
-    # a full NGC download. Cold start measured on the SNP node is ~810s.
+    # TEE variants keep the model cache in an emptyDir. Non-TEE runtime-rs uses
+    # a persistent raw block volume, but retain the cold-start budget so an
+    # explicitly reset cache can be populated.
     POD_READY_TIMEOUT_EMBEDQA_PREDEFINED=1000s
     POD_READY_TIMEOUT_INSTRUCT_PREDEFINED=1200s
 fi
@@ -150,6 +156,91 @@ setup_kbs_credentials() {
 
     # Enforce signed images for nvcr.io/nim (instruct and embedqa) in the guest.
     setup_kbs_nim_image_policy
+}
+
+# Attach a durable sparse file as a loop device and ensure it contains ext4.
+# Unlike create_loop_device(), this preserves the image and loop association
+# between separate gha-run invocations.
+ensure_persistent_nim_cache_device() {
+    local backing_file="$1"
+    local size_mib="$2"
+    local current_size device fs_type mount_dir
+
+    if ! exec_host "${node}" "test -f '${backing_file}'"; then
+        echo "# Creating persistent NIM cache backing file ${backing_file} (${size_mib} MiB)" >&3
+        exec_host "${node}" "mkdir -p '$(dirname "${backing_file}")' && truncate -s '${size_mib}M' '${backing_file}'"
+    else
+        current_size=$(exec_host "${node}" "stat -c %s '${backing_file}'")
+        if ((current_size < size_mib * 1024 * 1024)); then
+            echo "# Growing persistent NIM cache backing file ${backing_file} to ${size_mib} MiB" >&3
+            exec_host "${node}" "truncate -s '${size_mib}M' '${backing_file}'"
+        fi
+    fi
+
+    device=$(exec_host "${node}" "losetup -j '${backing_file}'" | awk -F'[: ]' 'NR == 1 {print $1}')
+    if [[ -z "${device}" ]]; then
+        device=$(exec_host "${node}" "losetup -fP --show '${backing_file}'")
+    fi
+    [[ -n "${device}" ]] || die "Failed to attach persistent NIM cache ${backing_file}"
+
+    fs_type=$(exec_host "${node}" "blkid -o value -s TYPE '${device}' 2>/dev/null || true")
+    case "${fs_type}" in
+        "")
+            echo "# Formatting ${device} as ext4" >&3
+            exec_host "${node}" \
+                "mkfs.ext4 -F -m 0 -E root_owner=1000:1000 '${device}' >/dev/null 2>&1"
+            ;;
+        ext4)
+            ;;
+        *)
+            die "Persistent NIM cache ${device} has unsupported filesystem ${fs_type}"
+            ;;
+    esac
+
+    # Existing images may have been created without root_owner. Mounting once
+    # on the node gives both new and reused caches the ownership NIM expects.
+    mount_dir=$(exec_host "${node}" "mktemp -d /tmp/nim-cache-prepare.XXXXXX")
+    exec_host "${node}" \
+        "mount '${device}' '${mount_dir}' && \
+         chown 1000:1000 '${mount_dir}' && chmod 2770 '${mount_dir}'; \
+         rc=\$?; umount '${mount_dir}' >/dev/null 2>&1 || true; \
+         rmdir '${mount_dir}' >/dev/null 2>&1 || true; exit \$rc"
+
+    echo "${device}"
+}
+
+# Create or reuse the static local block PV/PVC for one NIM model cache.
+prepare_persistent_nim_cache() {
+    local model="$1"
+    local backing_file="$2"
+    local size_mib="$3"
+    local pv="nim-cache-block-pv-${model}"
+    local pvc="nim-cache-block-pvc-${model}"
+    local current_device device pv_phase rendered
+    local template="${pod_config_dir}/confidential/trusted-storage.yaml.in"
+
+    if [[ "${NIM_CACHE_RESET}" == "true" ]]; then
+        echo "# Resetting persistent NIM cache for ${model}" >&3
+        kubectl delete pvc "${pvc}" --ignore-not-found=true --wait=true
+        kubectl delete pv "${pv}" --ignore-not-found=true --wait=true
+        cleanup_loop_device "${backing_file}"
+    fi
+
+    device=$(ensure_persistent_nim_cache_device "${backing_file}" "${size_mib}")
+    current_device=$(kubectl get pv "${pv}" -o jsonpath='{.spec.local.path}' 2>/dev/null || true)
+    pv_phase=$(kubectl get pv "${pv}" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    if [[ "${pv_phase}" == "Released" || ( -n "${current_device}" && "${current_device}" != "${device}" ) ]]; then
+        echo "# Recreating stale ${pv} metadata while preserving ${backing_file}" >&3
+        kubectl delete pvc "${pvc}" --ignore-not-found=true --wait=true
+        kubectl delete pv "${pv}" --ignore-not-found=true --wait=true
+    fi
+
+    rendered=$(mktemp "${BATS_FILE_TMPDIR}/$(basename "${template}").${model}.XXX")
+    PV_NAME="${pv}" PVC_NAME="${pvc}" \
+        PV_STORAGE_CAPACITY="${size_mib}Mi" PVC_STORAGE_REQUEST="${size_mib}Mi" \
+        LOCAL_DEVICE="${device}" NODE_NAME="${node}" \
+        envsubst < "${template}" > "${rendered}"
+    retry_kubectl_apply "${rendered}"
 }
 
 # Wait for a NIM pod to become ready, reporting how long each phase took.
@@ -269,6 +360,14 @@ setup_file() {
                 LOCAL_DEVICE="$local_device_embedqa" NODE_NAME="$node" \
                 envsubst < "$storage_config_template" > "$storage_config_embedqa"
             retry_kubectl_apply "$storage_config_embedqa"
+        fi
+    elif is_runtime_rs; then
+        prepare_persistent_nim_cache \
+            instruct "${NIM_CACHE_INSTRUCT_BACKING_FILE}" "${NIM_CACHE_INSTRUCT_SIZE_MIB}"
+
+        if [ "${SKIP_MULTI_GPU_TESTS}" != "true" ]; then
+            prepare_persistent_nim_cache \
+                embedqa "${NIM_CACHE_EMBEDQA_BACKING_FILE}" "${NIM_CACHE_EMBEDQA_SIZE_MIB}"
         fi
     fi
 
