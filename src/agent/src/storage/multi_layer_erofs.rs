@@ -103,6 +103,8 @@ struct MkdirDirective {
 #[derive(Debug)]
 struct LayerMountInfo {
     verity_device: Option<String>,
+    #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+    verity_roothash: Option<crate::ipe::VerityRootHash>,
 }
 
 #[async_trait::async_trait]
@@ -294,6 +296,8 @@ pub async fn handle_multi_layer_erofs_group(
 
     let mut lower_mounts = Vec::new();
     let mut verity_devices = Vec::new();
+    #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+    let mut verity_roothashes = Vec::new();
 
     // Pre-resolve all base device paths outside the parallel block to avoid
     // contention on the sandbox lock and the HashMap.
@@ -406,6 +410,10 @@ pub async fn handle_multi_layer_erofs_group(
         if let Some(verity_dev) = mount_info.verity_device {
             verity_devices.push(verity_dev);
         }
+        #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+        if let Some(verity_roothash) = mount_info.verity_roothash {
+            verity_roothashes.push(verity_roothash);
+        }
     }
 
     // If any mkdir directive refers to {{ mount 1 }}, resolve it now using the first lower mount.
@@ -514,6 +522,15 @@ pub async fn handle_multi_layer_erofs_group(
     // Track the parent directory last so cleanup removes it only once empty.
     track_temporary_mount_for_cleanup(sandbox, &temp_base, &logger).await?;
     temp_mount_points.push(temp_base.display().to_string());
+
+    // Record a root only after every layer and the final overlay mounted
+    // successfully. Failed dm-verity setup must never expand the IPE policy.
+    #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+    sandbox
+        .lock()
+        .await
+        .ipe_verity_roothashes
+        .extend(verity_roothashes);
 
     Ok(MultiLayerErofsResult {
         mount_point: target_mount_point,
@@ -813,6 +830,16 @@ async fn wait_and_mount_layer(
     let is_gpt = is_gpt_partitioned(layer);
     let partition_num = get_partition_number(layer);
     let dmverity_enabled = is_dmverity_enabled(layer);
+    #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+    let verity_roothash = if dmverity_enabled {
+        let info = parse_dmverity_options(layer).context("parse IPE dm-verity root hash")?;
+        Some((
+            info.hashtype.to_ascii_lowercase(),
+            info.hash.to_ascii_lowercase(),
+        ))
+    } else {
+        None
+    };
 
     // Get the base device path
     let base_dev_path = match base_dev_path {
@@ -930,6 +957,8 @@ async fn wait_and_mount_layer(
 
     Ok(LayerMountInfo {
         verity_device: verity_device_path,
+        #[cfg(all(feature = "ipe-prototype", feature = "devicemapper"))]
+        verity_roothash,
     })
 }
 

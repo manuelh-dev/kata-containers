@@ -67,6 +67,7 @@ KBUILD_SIGN_PIN="${KBUILD_SIGN_PIN:-}"
 RUNTIME_CHOICE="${RUNTIME_CHOICE:-both}"
 KERNEL_DEBUG_ENABLED=${KERNEL_DEBUG_ENABLED:-"no"}
 INIT_DATA="${INIT_DATA:-yes}"
+IPE_PROTOTYPE="${IPE_PROTOTYPE:-no}"
 
 workdir="${WORKDIR:-${PWD}}"
 
@@ -93,6 +94,10 @@ die() {
 	echo "ERROR: ${msg}" >&2
 	exit 1
 }
+
+if [[ "${IPE_PROTOTYPE}" == "yes" && ( "${PUSH_TO_REGISTRY}" == "yes" || "${RELEASE}" == "yes" ) ]]; then
+	die "IPE_PROTOTYPE embeds a throw-away private key and must not be published"
+fi
 
 info() {
 	echo "INFO: $*"
@@ -197,7 +202,11 @@ get_kernel_modules_dir() {
 		numeric_final_version="${numeric_final_version%-*}+"
 	fi
 
-	local kernel_modules_dir="${repo_root_dir}/tools/packaging/kata-deploy/local-build/build/${kernel_name}/builddir/kata-linux-${version}-${kernel_kata_config_version}/lib/modules/${numeric_final_version}"
+	local build_type_suffix=""
+	if [[ "${IPE_PROTOTYPE}" == "yes" && "${kernel_name}" == "kernel-nvidia-gpu" ]]; then
+		build_type_suffix="-ipe-experimental"
+	fi
+	local kernel_modules_dir="${repo_root_dir}/tools/packaging/kata-deploy/local-build/build/${kernel_name}/builddir/kata-linux${build_type_suffix}-${version}-${kernel_kata_config_version}/lib/modules/${numeric_final_version}"
 	echo "${kernel_modules_dir}"
 }
 
@@ -745,6 +754,9 @@ install_image() {
 		latest_artefact+="-$(get_latest_nvidia_nvrc_version)"
 		latest_artefact+="-$(get_latest_upx_version)"
 	fi
+	if [[ "${variant}" == "nvidia" && "${IPE_PROTOTYPE}" == "yes" ]]; then
+		latest_artefact+="-ipe-prototype"
+	fi
 
 	# The base guest image (empty variant) is built as a measured rootfs so
 	# that confidential configurations can dm-verity-protect it; non-confidential
@@ -787,6 +799,11 @@ install_image() {
 	if [[ "${variant}" != "nvidia-gpu-extension" ]]; then
 		AGENT_TARBALL=$(get_agent_tarball_path)
 		export AGENT_TARBALL
+	fi
+	if [[ "${variant}" == "nvidia" && "${IPE_PROTOTYPE}" == "yes" ]]; then
+		IPE_PROTOTYPE_KEY_TARBALL="${workdir}/kata-static-kernel-nvidia-gpu.tar.zst"
+		[[ -f "${IPE_PROTOTYPE_KEY_TARBALL}" ]] || die "IPE prototype kernel tarball not found: ${IPE_PROTOTYPE_KEY_TARBALL}"
+		export IPE_PROTOTYPE_KEY_TARBALL
 	fi
 	export AGENT_POLICY
 
@@ -1247,6 +1264,7 @@ install_cached_kernel_tarball_component() {
 	local extra_tarballs="${2:-}"
 
 	latest_artefact="${kernel_version}-${kernel_kata_config_version}-$(get_last_modification "$(dirname "${kernel_builder}")")"
+	[[ "${IPE_PROTOTYPE}" == "yes" && "${kernel_name}" == "kernel-nvidia-gpu" ]] && latest_artefact+="-ipe-prototype"
 	latest_builder_image="$(get_kernel_image_name)"
 
 	install_cached_tarball_component \
@@ -1372,10 +1390,12 @@ install_kernel_nvidia_gpu_dragonball_experimental() {
 install_kernel_nvidia_gpu() {
 	export CONFIDENTIAL_GUEST="yes"
 	export MEASURED_ROOTFS="yes"
+	local prototype_args=""
+	[[ "${IPE_PROTOTYPE}" == "yes" ]] && prototype_args=" -b ipe-experimental"
 	install_kernel_helper \
 		"assets.kernel.nvidia" \
 		"kernel-nvidia-gpu" \
-		"-x -g nvidia"
+		"-x -g nvidia${prototype_args}"
 }
 
 install_qemu_helper() {
@@ -1671,6 +1691,7 @@ install_shim_v2_rust() {
 	RUST_VERSION="$(get_from_kata_deps ".languages.rust.meta.newest-version")"
 
 	latest_artefact="$(get_kata_version)-${runtime_rs_last_commit}-${protocols_last_commit}-${RUST_VERSION}"
+	[[ "${IPE_PROTOTYPE}" == "yes" ]] && latest_artefact+="-ipe-prototype"
 	latest_builder_image="$(get_shim_v2_image_name)"
 
 	install_cached_tarball_component \
@@ -1747,6 +1768,7 @@ install_busybox() {
 
 install_agent() {
 	latest_artefact="$(get_kata_version)-$(git log -1 --abbrev=9 --pretty=format:"%h" "${repo_root_dir}"/src/agent)"
+	[[ "${IPE_PROTOTYPE}" == "yes" ]] && latest_artefact+="-ipe-prototype"
 	latest_builder_image="$(get_agent_image_name)"
 
 	install_cached_tarball_component \
@@ -1767,7 +1789,7 @@ install_agent() {
 	export GPERF_URL
 
 	info "build static agent"
-	DESTDIR="${destdir}" AGENT_POLICY="${AGENT_POLICY}" "${agent_builder}"
+	DESTDIR="${destdir}" AGENT_POLICY="${AGENT_POLICY}" IPE_PROTOTYPE="${IPE_PROTOTYPE}" "${agent_builder}"
 }
 
 install_coco_guest_components() {

@@ -30,6 +30,7 @@ SELINUX=${SELINUX:-"no"}
 AGENT_POLICY=${AGENT_POLICY:-no}
 AGENT_SOURCE_BIN=${AGENT_SOURCE_BIN:-""}
 AGENT_TARBALL=${AGENT_TARBALL:-""}
+IPE_PROTOTYPE_KEY_TARBALL=${IPE_PROTOTYPE_KEY_TARBALL:-""}
 GUEST_HOOKS_TARBALL="${GUEST_HOOKS_TARBALL:-}"
 COCO_GUEST_COMPONENTS_TARBALL=${COCO_GUEST_COMPONENTS_TARBALL:-""}
 CONFIDENTIAL_GUEST="${CONFIDENTIAL_GUEST:-no}"
@@ -594,6 +595,11 @@ build_rootfs_distro()
 		if [[ -n "${AGENT_TARBALL}" ]] ; then
 			engine_run_args+=" --env AGENT_TARBALL=${AGENT_TARBALL}"
 			engine_run_args+=" -v $(dirname "${AGENT_TARBALL}"):$(dirname "${AGENT_TARBALL}")"
+		fi
+
+		if [[ -n "${IPE_PROTOTYPE_KEY_TARBALL}" ]]; then
+			engine_run_args+=" --env IPE_PROTOTYPE_KEY_TARBALL=${IPE_PROTOTYPE_KEY_TARBALL}"
+			engine_run_args+=" -v $(dirname "${IPE_PROTOTYPE_KEY_TARBALL}"):$(dirname "${IPE_PROTOTYPE_KEY_TARBALL}")"
 		fi
 
 		if [[ -n "${COCO_GUEST_COMPONENTS_TARBALL}" ]] ; then

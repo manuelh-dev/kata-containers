@@ -3592,6 +3592,7 @@ dependencies = [
  "netlink-sys",
  "nix 0.31.3",
  "oci-spec 0.10.0",
+ "openssl",
  "opentelemetry 0.17.0",
  "pathrs",
  "pcilibs-rs",

@@ -58,6 +58,14 @@ ifeq ($(USE_DEVMAPPER),yes)
     override LIBC = gnu
 endif
 
+##VAR IPE_PROTOTYPE=yes|no enable the experimental guest-generated IPE policy
+IPE_PROTOTYPE ?= no
+
+ifeq ($(IPE_PROTOTYPE),yes)
+    override EXTRA_RUSTFEATURES += devicemapper ipe-prototype
+    override LIBC = gnu
+endif
+
 include ../../utils.mk
 
 ifneq ($(EXTRA_RUSTFEATURES),)

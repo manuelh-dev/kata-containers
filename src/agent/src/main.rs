@@ -45,6 +45,8 @@ mod device;
 mod features;
 mod guest_extension_image;
 mod initdata;
+#[cfg(feature = "ipe-prototype")]
+mod ipe;
 mod linux_abi;
 mod metrics;
 mod mount;

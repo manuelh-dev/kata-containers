@@ -435,6 +435,21 @@ setup_nvrc_init_symlinks() {
 	ln -sf /bin/"${nvrc}" sbin/init
 }
 
+install_ipe_prototype_credentials() {
+	[[ -n "${IPE_PROTOTYPE_KEY_TARBALL:-}" ]] || return 0
+
+	echo "nvidia: installing throw-away IPE prototype credentials"
+	local asset_dir="./opt/kata/share/kata-containers/ipe-prototype"
+	local guest_dir="etc/kata-containers/ipe-prototype"
+	tar --zstd -xf "${IPE_PROTOTYPE_KEY_TARBALL}" -C . \
+		"${asset_dir}/private-key.pem" \
+		"${asset_dir}/certificate.pem"
+	mkdir -p "${guest_dir}"
+	install -m 0400 "${asset_dir}/private-key.pem" "${guest_dir}/private-key.pem"
+	install -m 0444 "${asset_dir}/certificate.pem" "${guest_dir}/certificate.pem"
+	rm -f "${asset_dir}/private-key.pem" "${asset_dir}/certificate.pem"
+}
+
 chisseled_init() {
 	echo "nvidia: chisseling init"
 	tar --zstd -xvf "${BUILD_DIR}"/kata-static-busybox.tar.zst -C .
@@ -460,6 +475,7 @@ chisseled_init() {
 	setup_nvrc_init_symlinks
 
 	cp -a "${stage_one}"/usr/bin/kata-agent   usr/bin/.
+	install_ipe_prototype_credentials
 	if [[ "${AGENT_POLICY}" == "yes" ]]; then
 		cp -a "${stage_one}"/etc/kata-opa etc/.
 	fi

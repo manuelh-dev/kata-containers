@@ -83,6 +83,7 @@ safe-path.workspace = true
 logging.workspace = true
 pathrs.workspace = true
 vsock-exporter.workspace = true
+openssl = { features = ["vendored"], optional = true, version = "0.10.80" }
 
 # Initdata
 async-compression = { features = ["gzip", "tokio"], version = "0.4.22" }
@@ -108,4 +109,5 @@ lto = true
 agent-policy = ["kata-agent-policy"]
 devicemapper = ["kata-types/devicemapper"]
 init-data = []
+ipe-prototype = ["openssl"]
 seccomp = ["rustjail/seccomp"]

@@ -36,6 +36,8 @@ const CONFIG_FILE: &str = "agent.config_file";
 const GUEST_COMPONENTS_REST_API_OPTION: &str = "agent.guest_components_rest_api";
 const GUEST_COMPONENTS_PROCS_OPTION: &str = "agent.guest_components_procs";
 const SECURE_STORAGE_INTEGRITY_OPTION: &str = "agent.secure_storage_integrity";
+#[cfg(feature = "ipe-prototype")]
+const IPE_PROTOTYPE_FLAG: &str = "agent.ipe_prototype";
 
 // Configure the proxy settings for HTTPS requests in the guest,
 // to solve the problem of not being able to access the specified image in some cases.
@@ -148,6 +150,8 @@ pub struct AgentConfig {
     pub guest_components_rest_api: GuestComponentsFeatures,
     pub guest_components_procs: GuestComponentsProcs,
     pub secure_storage_integrity: bool,
+    #[cfg(feature = "ipe-prototype")]
+    pub ipe_prototype: bool,
     #[cfg(feature = "agent-policy")]
     pub policy_file: String,
     pub mem_agent: Option<MemAgentConfig>,
@@ -182,6 +186,8 @@ pub struct AgentConfigBuilder {
     pub guest_components_rest_api: Option<GuestComponentsFeatures>,
     pub guest_components_procs: Option<GuestComponentsProcs>,
     pub secure_storage_integrity: Option<bool>,
+    #[cfg(feature = "ipe-prototype")]
+    pub ipe_prototype: Option<bool>,
     #[cfg(feature = "agent-policy")]
     pub policy_file: Option<String>,
     pub mem_agent_enable: Option<bool>,
@@ -279,6 +285,8 @@ impl Default for AgentConfig {
             guest_components_rest_api: GuestComponentsFeatures::default(),
             guest_components_procs: GuestComponentsProcs::default(),
             secure_storage_integrity: true,
+            #[cfg(feature = "ipe-prototype")]
+            ipe_prototype: false,
             #[cfg(feature = "agent-policy")]
             policy_file: String::from(""),
             mem_agent: None,
@@ -325,6 +333,8 @@ impl FromStr for AgentConfig {
         );
         config_override!(agent_config_builder, agent_config, guest_components_procs);
         config_override!(agent_config_builder, agent_config, secure_storage_integrity);
+        #[cfg(feature = "ipe-prototype")]
+        config_override!(agent_config_builder, agent_config, ipe_prototype);
 
         #[cfg(feature = "agent-policy")]
         config_override!(agent_config_builder, agent_config, policy_file);
@@ -437,6 +447,8 @@ impl AgentConfig {
             // parse cmdline flags
             parse_cmdline_param!(param, DEBUG_CONSOLE_FLAG, config.debug_console);
             parse_cmdline_param!(param, DEV_MODE_FLAG, config.dev_mode);
+            #[cfg(feature = "ipe-prototype")]
+            parse_cmdline_param!(param, IPE_PROTOTYPE_FLAG, config.ipe_prototype);
 
             // Support "bare" tracing option for backwards compatibility with
             // Kata 1.x.
@@ -915,6 +927,8 @@ mod tests {
             guest_components_rest_api: GuestComponentsFeatures,
             guest_components_procs: GuestComponentsProcs,
             secure_storage_integrity: bool,
+            #[cfg(feature = "ipe-prototype")]
+            ipe_prototype: bool,
             #[cfg(feature = "agent-policy")]
             policy_file: &'a str,
             mem_agent: Option<MemAgentConfig>,
@@ -939,6 +953,8 @@ mod tests {
                     guest_components_rest_api: GuestComponentsFeatures::default(),
                     guest_components_procs: GuestComponentsProcs::default(),
                     secure_storage_integrity: true,
+                    #[cfg(feature = "ipe-prototype")]
+                    ipe_prototype: false,
                     #[cfg(feature = "agent-policy")]
                     policy_file: "",
                     mem_agent: None,
@@ -1414,6 +1430,12 @@ mod tests {
                 secure_storage_integrity: false,
                 ..Default::default()
             },
+            #[cfg(feature = "ipe-prototype")]
+            TestData {
+                contents: "agent.ipe_prototype",
+                ipe_prototype: true,
+                ..Default::default()
+            },
             #[cfg(feature = "agent-policy")]
             // Test environment
             TestData {
@@ -1523,6 +1545,8 @@ mod tests {
                 d.secure_storage_integrity, config.secure_storage_integrity,
                 "{msg}"
             );
+            #[cfg(feature = "ipe-prototype")]
+            assert_eq!(d.ipe_prototype, config.ipe_prototype, "{msg}");
             #[cfg(feature = "agent-policy")]
             assert_eq!(d.policy_file, config.policy_file, "{msg}");
 
