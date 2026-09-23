@@ -847,20 +847,19 @@ async fn wait_and_mount_layer(
         None
     };
 
-    // Determine the device path to mount
-    // If dm-verity is enabled, we'll create a verity device and mount that instead
+    // Determine the device path to mount. GPT layouts use the selected partition;
+    // a single raw EROFS image uses the base device for both data and its appended
+    // dm-verity hash tree.
     let (dev_path, verity_device_path) = if dmverity_enabled {
-        // dm-verity mode: create verity device from partition
-        let partition = partition_path.as_ref().ok_or_else(|| {
-            anyhow!("dm-verity requires GPT-partitioned storage with partition number")
-        })?;
+        let verity_backing_device = partition_path.as_ref().unwrap_or(&base_dev_path);
 
         // Create dm-verity device
-        let verity_device = create_partition_dmverity_device(partition, layer, logger).await?;
+        let verity_device =
+            create_partition_dmverity_device(verity_backing_device, layer, logger).await?;
         info!(
             logger,
             "Using dm-verity device for mount";
-            "partition" => partition,
+            "backing-device" => verity_backing_device,
             "verity-device" => &verity_device,
         );
         (verity_device.clone(), Some(verity_device))

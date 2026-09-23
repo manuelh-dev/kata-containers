@@ -795,6 +795,35 @@ impl ErofsMultiLayerRootfs {
                             .cloned()
                             .collect();
 
+                        // A single EROFS layer is attached as its original raw image rather
+                        // than through the multi-layer VMDK layout. Preserve the snapshotter's
+                        // dm-verity metadata in that case so the guest creates a verified
+                        // device and IPE can authorize execution from the real lower inode.
+                        // Multi-device fsmerge needs per-layer metadata and is intentionally
+                        // left to the GPT path above.
+                        if erofs_devices.len() == 1 {
+                            let options_map: HashMap<String, String> = mount
+                                .options
+                                .iter()
+                                .filter_map(|opt| {
+                                    opt.split_once('=')
+                                        .map(|(key, value)| (key.to_string(), value.to_string()))
+                                })
+                                .collect();
+
+                            if let Some(dmverity_path) = extract_dmverity_annotation(&options_map) {
+                                let metadata = parse_dmverity_metadata_file(dmverity_path)
+                                    .context(format!(
+                                        "failed to parse dm-verity metadata file {} for single EROFS layer",
+                                        dmverity_path
+                                    ))?;
+                                options.extend(generate_dmverity_options(
+                                    &metadata,
+                                    Some(&mount.source),
+                                ));
+                            }
+                        }
+
                         // Erofs layers are read-only lower layers (marked with X-kata.overlay-lower)
                         options.push("X-kata.overlay-lower".to_string());
                         options.push("X-kata.multi-layer=true".to_string());
