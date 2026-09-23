@@ -211,6 +211,14 @@ pub struct DmVerityInfo {
     /// false: superblock exists at offset, hash tree after superblock
     #[serde(default = "default_no_superblock")]
     pub no_superblock: bool,
+    /// Description of the temporary user key containing a detached PKCS#7
+    /// signature over `hash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_hash_sig_key_desc: Option<String>,
+    /// Detached PKCS#7 signature to publish in the same thread that loads the
+    /// dm-verity table. This transient payload is never serialized.
+    #[serde(skip)]
+    pub root_hash_sig: Option<Vec<u8>>,
 }
 
 fn default_hash_type() -> u32 {

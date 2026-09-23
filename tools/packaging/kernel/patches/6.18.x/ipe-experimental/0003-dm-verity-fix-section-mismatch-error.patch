@@ -1,0 +1,46 @@
+From 0f1e16b3a8634d540fb0c7a11ca13412d2902974 Mon Sep 17 00:00:00 2001
+From: Mikulas Patocka <mpatocka@redhat.com>
+Date: Wed, 21 Jan 2026 14:02:20 +0100
+Subject: [PATCH] dm-verity: fix section mismatch error
+
+The function "__init dm_verity_init" was calling "__exit
+dm_verity_verify_sig_exit" and this triggered section mismatch error.
+
+Fix this by dropping the "__exit" tag on dm_verity_verify_sig_exit.
+
+Upstream commit: 0f1e16b3a8634d540fb0c7a11ca13412d2902974
+Signed-off-by: Mikulas Patocka <mpatocka@redhat.com>
+Fixes: 033724b1c627A ("dm-verity: add dm-verity keyring")
+---
+ drivers/md/dm-verity-verify-sig.c | 2 +-
+ drivers/md/dm-verity-verify-sig.h | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/md/dm-verity-verify-sig.c b/drivers/md/dm-verity-verify-sig.c
+index 2a2abd9864c93..b2b55c41e2cb5 100644
+--- a/drivers/md/dm-verity-verify-sig.c
++++ b/drivers/md/dm-verity-verify-sig.c
+@@ -192,7 +192,7 @@ int __init dm_verity_verify_sig_init(void)
+ 	return 0;
+ }
+ 
+-void __exit dm_verity_verify_sig_exit(void)
++void dm_verity_verify_sig_exit(void)
+ {
+ 	key_revoke(dm_verity_keyring);
+ 	key_put(dm_verity_keyring);
+diff --git a/drivers/md/dm-verity-verify-sig.h b/drivers/md/dm-verity-verify-sig.h
+index b0bb0d4272441..90d6b9933f058 100644
+--- a/drivers/md/dm-verity-verify-sig.h
++++ b/drivers/md/dm-verity-verify-sig.h
+@@ -31,7 +31,7 @@ int verity_verify_sig_parse_opt_args(struct dm_arg_set *as, struct dm_verity *v,
+ void verity_verify_sig_opts_cleanup(struct dm_verity_sig_opts *sig_opts);
+ 
+ int __init dm_verity_verify_sig_init(void);
+-void __exit dm_verity_verify_sig_exit(void);
++void dm_verity_verify_sig_exit(void);
+ 
+ #else
+ 
+-- 
+2.47.3

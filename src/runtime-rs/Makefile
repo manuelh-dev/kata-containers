@@ -523,7 +523,7 @@ endif
     KERNELPARAMS_NV := cgroup_no_v1=all pci=realloc pci=nocrs pci=assign-busses
     KERNELPARAMS_NV_RUNTIME_RS := $(KERNELPARAMS_NV)
     ifeq ($(IPE_PROTOTYPE),yes)
-        KERNELPARAMS_NV_RUNTIME_RS += agent.ipe_prototype
+        KERNELPARAMS_NV_RUNTIME_RS += agent.ipe_prototype dm_verity.keyring_unsealed=1
     endif
 
     KERNELPARAMS_CONFIDENTIAL_NV = $(KERNELPARAMS_NV)

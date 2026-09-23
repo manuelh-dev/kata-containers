@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use devicemapper::{DevId, DmFlags, DmName, DmOptions, DmUdevFlags, DM};
 use nix::sys::stat::{self, Mode, SFlag};
 use slog::Logger;
+use std::ffi::CString;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -136,6 +137,82 @@ enum DmSetupResult {
     NeedUdevWait,
 }
 
+const KEY_SPEC_THREAD_KEYRING: nix::libc::c_long = -1;
+const KEYCTL_UNLINK: nix::libc::c_long = 9;
+
+struct TemporaryUserKey {
+    serial: nix::libc::c_long,
+}
+
+impl Drop for TemporaryUserKey {
+    fn drop(&mut self) {
+        unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_keyctl,
+                KEYCTL_UNLINK,
+                self.serial,
+                KEY_SPEC_THREAD_KEYRING,
+                0,
+                0,
+            );
+        }
+    }
+}
+
+fn publish_signature_key(description: &str, payload: &[u8]) -> Result<TemporaryUserKey> {
+    let key_type = CString::new("user").expect("static key type has no NUL");
+    let description =
+        CString::new(description).context("signature key description contains NUL")?;
+    let serial = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_add_key,
+            key_type.as_ptr(),
+            description.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            KEY_SPEC_THREAD_KEYRING,
+        )
+    };
+    if serial == -1 {
+        return Err(std::io::Error::last_os_error())
+            .context("publish dm-verity signature in ioctl thread keyring");
+    }
+
+    Ok(TemporaryUserKey { serial })
+}
+
+fn build_verity_params(
+    verity_info: &DmVerityInfo,
+    source_display: &str,
+    hash_start_block: u64,
+) -> Result<String> {
+    let salt = verity_info.salt.as_deref().unwrap_or("-");
+    let mut params = format!(
+        "{} {} {} {} {} {} {} {} {} {}",
+        verity_info.hash_type,
+        source_display,
+        source_display,
+        verity_info.blocksize,
+        verity_info.hashsize,
+        verity_info.blocknum,
+        hash_start_block,
+        verity_info.hashtype,
+        verity_info.hash,
+        salt
+    );
+
+    if let Some(key_desc) = &verity_info.root_hash_sig_key_desc {
+        if key_desc.is_empty() || key_desc.bytes().any(|c| c.is_ascii_whitespace()) {
+            return Err(anyhow!(
+                "invalid dm-verity root hash signature key description"
+            ));
+        }
+        params.push_str(&format!(" 2 root_hash_sig_key_desc {key_desc}"));
+    }
+
+    Ok(params)
+}
+
 /// Destroy a dm-verity device by name.
 pub fn destroy_dmverity_device(verity_device_name: &str) -> Result<()> {
     let dm = devicemapper::DM::new()?;
@@ -237,6 +314,21 @@ pub async fn create_dmverity_device(
     // blocking on udevd event processing. When udev is running, we wait for the
     // device node asynchronously after the ioctl completes (via wait_for_dm_dev_node).
     let dev_path_or_need_udev = tokio::task::spawn_blocking(move || -> Result<DmSetupResult> {
+        let _signature_key = match (
+            verity_info.root_hash_sig_key_desc.as_deref(),
+            verity_info.root_hash_sig.as_deref(),
+        ) {
+            (Some(description), Some(payload)) => {
+                Some(publish_signature_key(description, payload)?)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(anyhow!(
+                    "dm-verity signature description and payload must be supplied together"
+                ));
+            }
+        };
+
         let dm = DM::new()?;
         let verity_name = DmName::new(&verity_name_string)?;
         let id = DevId::Name(verity_name);
@@ -261,21 +353,8 @@ pub async fn create_dmverity_device(
             (verity_info.offset / verity_info.hashsize) + superblock_blocks
         };
 
-        let salt = verity_info.salt.as_deref().unwrap_or("-");
         let source_display = source_path.display().to_string();
-        let verity_params = format!(
-            "{} {} {} {} {} {} {} {} {} {}",
-            verity_info.hash_type,
-            source_display,
-            source_display,
-            verity_info.blocksize,
-            verity_info.hashsize,
-            verity_info.blocknum,
-            hash_start_block,
-            verity_info.hashtype,
-            verity_info.hash,
-            salt
-        );
+        let verity_params = build_verity_params(&verity_info, &source_display, hash_start_block)?;
 
         let verity_table = vec![(
             0,
@@ -295,7 +374,8 @@ pub async fn create_dmverity_device(
             "hash_algorithm" => &verity_info.hashtype,
             "hash_type" => verity_info.hash_type,
             "no_superblock" => verity_info.no_superblock,
-            "salt" => salt,
+            "salt" => verity_info.salt.as_deref().unwrap_or("-"),
+            "root-hash-signed" => verity_info.root_hash_sig_key_desc.is_some(),
             "table_params" => &verity_params,
         );
 
@@ -336,4 +416,42 @@ pub async fn create_dmverity_device(
     };
 
     Ok(dev_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_info() -> DmVerityInfo {
+        DmVerityInfo {
+            hashtype: "sha256".to_string(),
+            hash: "ab".repeat(32),
+            blocknum: 8,
+            blocksize: 4096,
+            hashsize: 4096,
+            offset: 32768,
+            salt: None,
+            hash_type: 1,
+            no_superblock: true,
+            root_hash_sig_key_desc: None,
+            root_hash_sig: None,
+        }
+    }
+
+    #[test]
+    fn verity_params_include_root_hash_signature() {
+        let mut info = test_info();
+        info.root_hash_sig_key_desc = Some("kata-erofs-42".to_string());
+        let params = build_verity_params(&info, "/dev/vda1", 8).unwrap();
+
+        assert!(params.ends_with(" 2 root_hash_sig_key_desc kata-erofs-42"));
+    }
+
+    #[test]
+    fn verity_params_reject_unsafe_key_description() {
+        let mut info = test_info();
+        info.root_hash_sig_key_desc = Some("not safe".to_string());
+
+        assert!(build_verity_params(&info, "/dev/vda1", 8).is_err());
+    }
 }

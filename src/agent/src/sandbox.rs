@@ -4,8 +4,6 @@
 //
 
 use std::collections::hash_map::Entry;
-#[cfg(feature = "ipe-prototype")]
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs;
@@ -124,9 +122,6 @@ pub struct Sandbox {
     pub container_mounts: HashMap<String, Vec<String>>,
     /// dm-verity devices per container for cleanup
     pub container_verity_devices: HashMap<String, Vec<String>>,
-    /// dm-verity roots accepted by successfully mounted EROFS image layers.
-    #[cfg(feature = "ipe-prototype")]
-    pub ipe_verity_roothashes: BTreeSet<crate::ipe::VerityRootHash>,
     /// True after the one-shot policy has been activated and the kernel sealed.
     #[cfg(feature = "ipe-prototype")]
     pub ipe_prototype_sealed: bool,
@@ -165,8 +160,6 @@ impl Sandbox {
             mounts: Vec::new(),
             container_mounts: HashMap::new(),
             container_verity_devices: HashMap::new(),
-            #[cfg(feature = "ipe-prototype")]
-            ipe_verity_roothashes: BTreeSet::new(),
             #[cfg(feature = "ipe-prototype")]
             ipe_prototype_sealed: false,
             uevent_map: HashMap::new(),
