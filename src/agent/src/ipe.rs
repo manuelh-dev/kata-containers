@@ -4,8 +4,9 @@
 
 //! Experimental IPE bootstrap for ephemeral Kata guests.
 //!
-//! This deliberately keeps a throw-away policy signing key in the guest. It is
-//! only safe together with the experimental, irreversible IPE seal interface.
+//! The agent owns an ephemeral policy signer only during trusted guest setup.
+//! It provisions the corresponding public certificate into a dedicated IPE
+//! keyring, then activates a policy that denies subsequent IPE configuration.
 
 use std::collections::BTreeSet;
 #[cfg(feature = "devicemapper")]
@@ -45,12 +46,12 @@ use slog::Logger;
 const IPE_SECURITYFS: &str = "/sys/kernel/security";
 const IPE_ROOT: &str = "/sys/kernel/security/ipe";
 const IPE_POLICY_NAME: &str = "kata_verity";
-const IPE_PRIVATE_KEY: &str = "/etc/kata-containers/ipe-prototype/private-key.pem";
-const IPE_CERTIFICATE: &str = "/etc/kata-containers/ipe-prototype/certificate.pem";
 #[cfg(feature = "devicemapper")]
 const DM_VERITY_KEYRING_NAME: &str = ".dm-verity";
 #[cfg(feature = "devicemapper")]
 const LAYER_CERTIFICATE_DESCRIPTION: &str = "kata-erofs-ephemeral";
+const IPE_KEYRING_NAME: &str = ".ipe";
+const IPE_CERTIFICATE_DESCRIPTION: &str = "kata-ipe-ephemeral";
 
 #[cfg(feature = "devicemapper")]
 const KEYCTL_UNLINK: libc::c_long = 9;
@@ -67,7 +68,7 @@ pub type VerityRootHash = (String, String);
 #[cfg(feature = "devicemapper")]
 #[derive(Default)]
 struct LayerSignerState {
-    signer: Option<LayerSigner>,
+    signer: Option<EphemeralSigner>,
     finalized: bool,
     active_signatures: usize,
 }
@@ -80,7 +81,7 @@ struct LayerSignerGlobal {
 }
 
 #[cfg(feature = "devicemapper")]
-struct LayerSigner {
+struct EphemeralSigner {
     private_key: PKey<Private>,
     certificate: X509,
 }
@@ -149,13 +150,12 @@ fn unlink_key(key_serial: libc::c_long, keyring: libc::c_long) {
 }
 
 #[cfg(feature = "devicemapper")]
-fn parse_dm_verity_keyring_id(keys: &str) -> Option<libc::c_long> {
+fn parse_keyring_id(keys: &str, keyring_name: &str) -> Option<libc::c_long> {
     keys.lines().find_map(|line| {
         let fields: Vec<_> = line.split_ascii_whitespace().collect();
         // /proc/keys appends a colon and the key count to keyring
         // descriptions, for example: "keyring .dm-verity: empty".
-        if fields.get(7) != Some(&"keyring")
-            || fields.get(8)?.trim_end_matches(':') != DM_VERITY_KEYRING_NAME
+        if fields.get(7) != Some(&"keyring") || fields.get(8)?.trim_end_matches(':') != keyring_name
         {
             return None;
         }
@@ -166,17 +166,15 @@ fn parse_dm_verity_keyring_id(keys: &str) -> Option<libc::c_long> {
 }
 
 #[cfg(feature = "devicemapper")]
-fn find_dm_verity_keyring() -> Result<libc::c_long> {
+fn find_keyring(keyring_name: &str) -> Result<libc::c_long> {
     let keys = fs::read_to_string("/proc/keys").context("read /proc/keys")?;
-    parse_dm_verity_keyring_id(&keys).ok_or_else(|| {
-        anyhow!(
-            "{DM_VERITY_KEYRING_NAME} is unavailable; use the experimental dm-verity keyring kernel"
-        )
+    parse_keyring_id(&keys, keyring_name).ok_or_else(|| {
+        anyhow!("{keyring_name} keyring is unavailable in the experimental IPE kernel")
     })
 }
 
 #[cfg(feature = "devicemapper")]
-fn seal_keyring(keyring: libc::c_long) -> Result<()> {
+fn seal_keyring(keyring: libc::c_long, keyring_name: &str) -> Result<()> {
     let rc = unsafe {
         libc::syscall(
             libc::SYS_keyctl,
@@ -189,19 +187,19 @@ fn seal_keyring(keyring: libc::c_long) -> Result<()> {
     };
     if rc == -1 {
         return Err(std::io::Error::last_os_error())
-            .context("seal and activate the dm-verity keyring");
+            .with_context(|| format!("seal and activate {keyring_name} keyring"));
     }
     Ok(())
 }
 
 #[cfg(feature = "devicemapper")]
-fn generate_layer_signer() -> Result<LayerSigner> {
+fn generate_ephemeral_signer(common_name: &str) -> Result<EphemeralSigner> {
     let rsa = Rsa::generate(2048).context("generate ephemeral EROFS signing key")?;
     let private_key = PKey::from_rsa(rsa).context("create ephemeral EROFS signing key")?;
 
     let mut name = X509NameBuilder::new().context("create layer certificate subject")?;
-    name.append_entry_by_text("CN", "Kata ephemeral EROFS signer")
-        .context("set layer certificate subject")?;
+    name.append_entry_by_text("CN", common_name)
+        .context("set ephemeral certificate subject")?;
     let name = name.build();
 
     let mut certificate = X509::builder().context("create layer certificate")?;
@@ -270,41 +268,56 @@ fn generate_layer_signer() -> Result<LayerSigner> {
         .context("self-sign layer certificate")?;
     let certificate = certificate.build();
 
-    Ok(LayerSigner {
+    Ok(EphemeralSigner {
         private_key,
         certificate,
     })
 }
 
 #[cfg(feature = "devicemapper")]
-fn new_layer_signer() -> Result<LayerSigner> {
-    let signer = generate_layer_signer()?;
-    let keyring = find_dm_verity_keyring()?;
+fn provision_certificate(
+    signer: &EphemeralSigner,
+    keyring_name: &str,
+    certificate_description: &str,
+) -> Result<()> {
+    let keyring = find_keyring(keyring_name)?;
     let certificate_der = signer
         .certificate
         .to_der()
         .context("encode ephemeral EROFS certificate")?;
     let certificate_key = add_key(
         "asymmetric",
-        LAYER_CERTIFICATE_DESCRIPTION,
+        certificate_description,
         &certificate_der,
         keyring,
     )
     .context("provision ephemeral EROFS certificate")?;
-    if let Err(err) = seal_keyring(keyring) {
+    if let Err(err) = seal_keyring(keyring, keyring_name) {
         unlink_key(certificate_key, keyring);
         return Err(err);
     }
 
     info!(
         slog_scope::logger(),
-        "provisioned and sealed ephemeral dm-verity layer keyring"
+        "provisioned and sealed ephemeral keyring";
+        "keyring" => keyring_name,
     );
+    Ok(())
+}
+
+#[cfg(feature = "devicemapper")]
+fn new_layer_signer() -> Result<EphemeralSigner> {
+    let signer = generate_ephemeral_signer("Kata ephemeral EROFS signer")?;
+    provision_certificate(
+        &signer,
+        DM_VERITY_KEYRING_NAME,
+        LAYER_CERTIFICATE_DESCRIPTION,
+    )?;
     Ok(signer)
 }
 
 #[cfg(feature = "devicemapper")]
-impl LayerSigner {
+impl EphemeralSigner {
     fn sign(&self, root_hash: &str) -> Result<Vec<u8>> {
         if !is_hex_digest(root_hash) {
             bail!("refusing to sign an invalid dm-verity root hash");
@@ -474,24 +487,29 @@ pub(crate) fn render_policy(hashes: &BTreeSet<VerityRootHash>) -> Result<String>
         ));
     }
     policy.push_str("op=EXECUTE dmverity_signature=TRUE action=ALLOW\n");
+    policy.push_str("op=IPE_CONFIG action=DENY\n");
 
     Ok(policy)
 }
 
-fn sign_policy(policy: &[u8]) -> Result<Vec<u8>> {
-    let key_data = fs::read(IPE_PRIVATE_KEY)
-        .with_context(|| format!("read prototype IPE key {IPE_PRIVATE_KEY}"))?;
-    let cert_data = fs::read(IPE_CERTIFICATE)
-        .with_context(|| format!("read prototype IPE certificate {IPE_CERTIFICATE}"))?;
+fn new_policy_signer() -> Result<EphemeralSigner> {
+    let signer = generate_ephemeral_signer("Kata ephemeral IPE policy signer")?;
+    provision_certificate(&signer, IPE_KEYRING_NAME, IPE_CERTIFICATE_DESCRIPTION)
+        .context("provision the ephemeral IPE policy certificate")?;
+    Ok(signer)
+}
 
-    let key = PKey::private_key_from_pem(&key_data).context("parse prototype IPE private key")?;
-    let cert = X509::from_pem(&cert_data)
-        .or_else(|_| X509::from_der(&cert_data))
-        .context("parse prototype IPE certificate")?;
+fn sign_policy(policy: &[u8], signer: &EphemeralSigner) -> Result<Vec<u8>> {
     let certificates = Stack::new().context("create PKCS#7 certificate stack")?;
     let flags = Pkcs7Flags::BINARY | Pkcs7Flags::NOATTR | Pkcs7Flags::NOSMIMECAP;
-    let signed = Pkcs7::sign(&cert, &key, &certificates, policy, flags)
-        .context("sign prototype IPE policy")?;
+    let signed = Pkcs7::sign(
+        &signer.certificate,
+        &signer.private_key,
+        &certificates,
+        policy,
+        flags,
+    )
+    .context("sign prototype IPE policy")?;
 
     signed.to_der().context("encode prototype IPE policy")
 }
@@ -526,15 +544,21 @@ fn ensure_securityfs() -> Result<()> {
     Ok(())
 }
 
-/// Install, activate, enforce, and irreversibly seal the generated policy.
-pub(crate) fn activate_and_seal(logger: &Logger) -> Result<()> {
+/// Install and activate the generated policy, then let it lock its own IPE
+/// control plane through `op=IPE_CONFIG action=DENY`.
+pub(crate) fn activate_and_lockdown(logger: &Logger) -> Result<()> {
     let cmdline = fs::read_to_string("/proc/cmdline").context("read kernel command line")?;
     let hashes = hashes_from_kernel_cmdline(&cmdline);
 
     let policy = render_policy(&hashes)?;
-    let signed_policy = sign_policy(policy.as_bytes())?;
+    let policy_signer = new_policy_signer()?;
+    let signed_policy = sign_policy(policy.as_bytes(), &policy_signer)?;
+    drop(policy_signer);
 
     ensure_securityfs()?;
+    // Enable enforcement before making the locking policy active. Once active,
+    // IPE_CONFIG denies a later attempt to change this value.
+    write_securityfs(&format!("{IPE_ROOT}/enforce"), b"1").context("enable IPE enforcement")?;
     write_securityfs(&format!("{IPE_ROOT}/new_policy"), &signed_policy)
         .context("deploy prototype IPE policy")?;
     write_securityfs(
@@ -542,19 +566,10 @@ pub(crate) fn activate_and_seal(logger: &Logger) -> Result<()> {
         b"1",
     )
     .context("activate prototype IPE policy")?;
-    write_securityfs(&format!("{IPE_ROOT}/enforce"), b"1").context("enable IPE enforcement")?;
-
-    let seal = format!("{IPE_ROOT}/seal");
-    if !Path::new(&seal).exists() {
-        return Err(anyhow!(
-            "IPE seal interface is unavailable; use the ipe-experimental Kata kernel"
-        ));
-    }
-    write_securityfs(&seal, b"1").context("irreversibly seal IPE")?;
 
     info!(
         logger,
-        "activated and sealed prototype IPE policy";
+        "activated self-locking prototype IPE policy";
         "dm-verity-root-hashes" => hashes.len(),
     );
     Ok(())
@@ -587,13 +602,18 @@ mod tests {
         assert!(policy.contains("DEFAULT op=EXECUTE action=DENY"));
         assert!(policy.contains("dmverity_roothash=sha256:"));
         assert!(policy.contains("dmverity_signature=TRUE"));
+        assert!(policy.contains("op=IPE_CONFIG action=DENY"));
     }
 
     #[test]
     #[cfg(feature = "devicemapper")]
-    fn parse_dm_verity_keyring() {
+    fn parse_named_keyring() {
         let keys = "1a2b3c4d I------ 1 perm 3f010000 0 0 keyring .dm-verity: empty\n";
-        assert_eq!(parse_dm_verity_keyring_id(keys), Some(0x1a2b3c4d));
+        assert_eq!(
+            parse_keyring_id(keys, DM_VERITY_KEYRING_NAME),
+            Some(0x1a2b3c4d)
+        );
+        assert_eq!(parse_keyring_id(keys, IPE_KEYRING_NAME), None);
     }
 
     #[test]
@@ -601,7 +621,7 @@ mod tests {
     fn layer_signature_verifies_as_detached_pkcs7() {
         use openssl::x509::store::X509StoreBuilder;
 
-        let signer = generate_layer_signer().unwrap();
+        let signer = generate_ephemeral_signer("Kata test signer").unwrap();
         let root_hash = "ab".repeat(32);
         let signature = signer.sign(&root_hash).unwrap();
         let signature = Pkcs7::from_der(&signature).unwrap();

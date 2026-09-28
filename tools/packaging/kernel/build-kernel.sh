@@ -486,26 +486,12 @@ setup_kernel() {
 		"${packaging_scripts_dir}/apply_patches.sh" "${build_type_patches_dir}"
 	fi
 
-	if [[ "${build_type}" == "ipe-experimental" ]]; then
-		local prototype_key="certs/ipe-prototype-private-key.pem"
-		local prototype_cert="certs/ipe-prototype-certificate.pem"
-		if [[ ! -f "${prototype_key}" || ! -f "${prototype_cert}" ]]; then
-			openssl req -new -x509 -newkey rsa:3072 -sha256 -nodes -days 3650 \
-				-subj "/CN=Kata IPE prototype/" \
-				-keyout "${prototype_key}" \
-				-out "${prototype_cert}"
-		fi
-	fi
-
 	# shellcheck disable=SC2030
 	[[ -n "${hypervisor_target}" ]] || hypervisor_target="kvm"
 	[[ -n "${kernel_config_path}" ]] || kernel_config_path=$(get_default_kernel_config "${kernel_version}" "${hypervisor_target}" "${arch_target}" "${kernel_path}")
 
 	info "Copying config file from: ${kernel_config_path}"
 	cp "${kernel_config_path}" ./.config
-	if [[ "${build_type}" == "ipe-experimental" ]]; then
-		KCONFIG_CONFIG=.config scripts/config --set-str SYSTEM_TRUSTED_KEYS "certs/ipe-prototype-certificate.pem"
-	fi
 	ARCH=${arch_target}  make oldconfig
 	)
 
@@ -633,13 +619,6 @@ install_kata() {
 	install --mode 0644 -D ./System.map "${install_path}/System.map-${kernel_version}-${config_version}${suffix}"
 
 	if [[ "${build_type}" == "ipe-experimental" ]]; then
-		local prototype_key="certs/ipe-prototype-private-key.pem"
-		local prototype_cert="certs/ipe-prototype-certificate.pem"
-		[[ -f "${prototype_key}" ]] || die "${prototype_key} was not generated"
-		[[ -f "${prototype_cert}" ]] || die "${prototype_cert} was not generated"
-		install --mode 0400 -D "${prototype_key}" "${install_path}/ipe-prototype/private-key.pem"
-		install --mode 0444 -D "${prototype_cert}" "${install_path}/ipe-prototype/certificate.pem"
-
 		# Keep the standard NVIDIA kernel path usable by the existing runtime
 		# configuration while this opt-in build replaces that kernel artifact.
 		if [[ "${gpu_vendor}" == "${VENDOR_NVIDIA}" ]]; then

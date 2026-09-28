@@ -12,14 +12,13 @@ IPE_PROTOTYPE=yes make -f tools/packaging/kata-deploy/local-build/Makefile nvgpu
 
 `IPE_PROTOTYPE=yes` makes the build:
 
-- build the NVIDIA kernel with IPE, the experimental irreversible `seal`
-  interface, and a backport of Linux 7.0's dedicated `.dm-verity` keyring;
+- build the NVIDIA kernel with IPE policy-controlled control-plane lockdown,
+  a dedicated `.ipe` policy-signing keyring, and a backport of Linux 7.0's
+  dedicated `.dm-verity` keyring;
 - build kata-agent with the prototype IPE code and device-mapper support;
-- generate a dedicated throwaway IPE keypair, compile its certificate into the
-  kernel trusted keyring, and copy the keypair into the measured NVIDIA base
-  image; and
-- add `agent.ipe_prototype` and `dm_verity.keyring_unsealed=1` only to the
-  generated `kata-qemu-nvidia-gpu-runtime-rs` configuration.
+- add `agent.ipe_prototype`, `ipe.keyring_unsealed=1`, and
+  `dm_verity.keyring_unsealed=1` only to the generated
+  `kata-qemu-nvidia-gpu-runtime-rs` configuration.
 
 When the first EROFS layer is attached, the agent generates an ephemeral RSA
 layer-signing keypair in memory, installs its public certificate in
@@ -34,27 +33,27 @@ has copied and verified it.
 The sandbox container may start while trusted guest setup continues. At the
 first non-sandbox `StartContainer`, the agent destroys the ephemeral layer
 private key. It also ensures `.dm-verity` is provisioned and sealed when no
-EROFS layer was attached. The agent then creates an IPE policy containing
+EROFS layer was attached. The agent then creates a second, separate ephemeral
+IPE policy-signing keypair, installs its public certificate in `.ipe`, and
+irreversibly restricts that keyring. It creates an IPE policy containing
 explicit root hashes for the rootfs and cold-plug extensions from the kernel
 command line, plus a generic `dmverity_signature=TRUE` execution rule for
-EROFS layers. It PKCS#7-signs and activates the policy, enables enforcement,
-and writes `1` to `/sys/kernel/security/ipe/seal`.
+EROFS layers. The policy adds `op=IPE_CONFIG action=DENY`. The agent PKCS#7
+signs the policy, drops the private key, enables enforcement, and activates
+the policy.
 
 The policy allows non-execution IPE operations, denies execution by default,
 and allows execution only from explicitly listed boot disks or a dm-verity
-device whose root-hash signature the kernel validated. Once sealed, the kernel
-rejects changes through `new_policy`, `active`, `update`, `delete`, and
-`enforce` for the rest of the VM lifetime.
+device whose root-hash signature the kernel validated. Once activated, its
+`IPE_CONFIG` rule rejects changes through `new_policy`, `active`, `update`,
+`delete`, `enforce`, and `success_audit` for the rest of the VM lifetime.
 
 ## Prototype limitations
 
-- The IPE policy private key is deliberately present in the guest. The build
-  refuses release or registry-push modes, but its artifacts must still be
-  treated as test-only and must not be published. The separate EROFS layer
-  private key is generated only in memory and dropped at finalization. The
-  guest keypair must come from the exact kernel artifact whose trusted keyring
-  contains the corresponding certificate; mixing independently rebuilt kernel
-  and rootfs artifacts makes policy deployment fail closed.
+- The IPE policy and EROFS layer private keys are generated only in agent
+  memory and dropped at finalization. The build still refuses release or
+  registry-push modes because this is an experimental kernel and agent
+  integration, not a production trust design.
 - The first non-sandbox `StartContainer` is the finalization boundary. A later
   container whose image introduces another EROFS root hash cannot attach that
   layer.
@@ -65,7 +64,8 @@ rejects changes through `new_policy`, `active`, `update`, `delete`, and
   A confidential-container version must authorize dynamic layer hashes or
   signatures through attestation and the agent security policy.
 - The `.dm-verity` keyring is an upstream Linux 7.0 interface backported to the
-  Kata 6.18 kernel. The IPE `seal` remains an experimental, local interface.
+  Kata 6.18 kernel. The `.ipe` keyring and `IPE_CONFIG` operation remain
+  experimental, local interfaces.
 - This remains a hybrid prototype: it generates and signs the IPE policy in the
   guest instead of embedding a static policy in the kernel.
 - The NVIDIA rootfs and GPU-extension builders UPX-compress most executable ELF
@@ -82,7 +82,6 @@ Inside a protected guest, these should all print `1`:
 
 ```sh
 cat /sys/kernel/security/ipe/enforce
-cat /sys/kernel/security/ipe/seal
 cat /sys/kernel/security/ipe/policies/kata_verity/active
 ```
 

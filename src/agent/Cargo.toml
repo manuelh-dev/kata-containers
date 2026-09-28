@@ -109,5 +109,5 @@ lto = true
 agent-policy = ["kata-agent-policy"]
 devicemapper = ["kata-types/devicemapper"]
 init-data = []
-ipe-prototype = ["openssl"]
+ipe-prototype = ["openssl", "devicemapper"]
 seccomp = ["rustjail/seccomp"]

@@ -437,15 +437,15 @@ impl AgentService {
         }
 
         #[cfg(feature = "ipe-prototype")]
-        if AGENT_CONFIG.ipe_prototype && !s.ipe_prototype_sealed && sid != cid {
+        if AGENT_CONFIG.ipe_prototype && !s.ipe_prototype_finalized && sid != cid {
             #[cfg(feature = "devicemapper")]
             crate::ipe::finalize_layer_signer().await.context(
                 "destroy the ephemeral EROFS signer before starting a workload container",
             )?;
-            crate::ipe::activate_and_seal(&s.logger).context(
+            crate::ipe::activate_and_lockdown(&s.logger).context(
                 "activate the prototype IPE policy before starting a workload container",
             )?;
-            s.ipe_prototype_sealed = true;
+            s.ipe_prototype_finalized = true;
         }
 
         let ctr = s

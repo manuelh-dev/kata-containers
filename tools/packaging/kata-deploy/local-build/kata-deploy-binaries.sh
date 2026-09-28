@@ -96,7 +96,7 @@ die() {
 }
 
 if [[ "${IPE_PROTOTYPE}" == "yes" && ( "${PUSH_TO_REGISTRY}" == "yes" || "${RELEASE}" == "yes" ) ]]; then
-	die "IPE_PROTOTYPE embeds a throw-away private key and must not be published"
+	die "IPE_PROTOTYPE is an experimental kernel and agent integration and must not be published"
 fi
 
 info() {
@@ -799,11 +799,6 @@ install_image() {
 	if [[ "${variant}" != "nvidia-gpu-extension" ]]; then
 		AGENT_TARBALL=$(get_agent_tarball_path)
 		export AGENT_TARBALL
-	fi
-	if [[ "${variant}" == "nvidia" && "${IPE_PROTOTYPE}" == "yes" ]]; then
-		IPE_PROTOTYPE_KEY_TARBALL="${workdir}/kata-static-kernel-nvidia-gpu.tar.zst"
-		[[ -f "${IPE_PROTOTYPE_KEY_TARBALL}" ]] || die "IPE prototype kernel tarball not found: ${IPE_PROTOTYPE_KEY_TARBALL}"
-		export IPE_PROTOTYPE_KEY_TARBALL
 	fi
 	export AGENT_POLICY
 

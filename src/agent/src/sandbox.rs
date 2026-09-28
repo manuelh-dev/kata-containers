@@ -122,9 +122,9 @@ pub struct Sandbox {
     pub container_mounts: HashMap<String, Vec<String>>,
     /// dm-verity devices per container for cleanup
     pub container_verity_devices: HashMap<String, Vec<String>>,
-    /// True after the one-shot policy has been activated and the kernel sealed.
+    /// True after the one-shot policy has been activated and locked itself.
     #[cfg(feature = "ipe-prototype")]
-    pub ipe_prototype_sealed: bool,
+    pub ipe_prototype_finalized: bool,
     pub uevent_map: HashMap<String, Uevent>,
     pub uevent_watchers: Vec<Option<UeventWatcher>>,
     pub shared_utsns: Namespace,
@@ -161,7 +161,7 @@ impl Sandbox {
             container_mounts: HashMap::new(),
             container_verity_devices: HashMap::new(),
             #[cfg(feature = "ipe-prototype")]
-            ipe_prototype_sealed: false,
+            ipe_prototype_finalized: false,
             uevent_map: HashMap::new(),
             uevent_watchers: Vec::new(),
             shared_utsns: Namespace::new(&logger),
