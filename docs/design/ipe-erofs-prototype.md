@@ -38,15 +38,19 @@ IPE policy-signing keypair, installs its public certificate in `.ipe`, and
 irreversibly restricts that keyring. It creates an IPE policy containing
 explicit root hashes for the rootfs and cold-plug extensions from the kernel
 command line, plus a generic `dmverity_signature=TRUE` execution rule for
-EROFS layers. The policy adds `op=IPE_CONFIG action=DENY`. The agent PKCS#7
-signs the policy, drops the private key, enables enforcement, and activates
-the policy.
+EROFS layers. The policy explicitly denies the fine-grained IPE control
+operations for policy loading, updating, activation and deletion, enforcement
+changes, and success-audit changes. The agent PKCS#7 signs the policy, drops
+the private key, enables enforcement, and activates the policy.
 
 The policy allows non-execution IPE operations, denies execution by default,
 and allows execution only from explicitly listed boot disks or a dm-verity
 device whose root-hash signature the kernel validated. Once activated, its
-`IPE_CONFIG` rule rejects changes through `new_policy`, `active`, `update`,
-`delete`, `enforce`, and `success_audit` for the rest of the VM lifetime.
+control-operation rules reject changes through `new_policy`, `active`,
+`update`, `delete`, `enforce`, and `success_audit` for the rest of the VM
+lifetime. The securityfs ABI and its existing capability, signature, version,
+and active-policy checks are unchanged; the active IPE policy is an additional
+authorization layer for each operation.
 
 ## Prototype limitations
 
@@ -64,8 +68,8 @@ device whose root-hash signature the kernel validated. Once activated, its
   A confidential-container version must authorize dynamic layer hashes or
   signatures through attestation and the agent security policy.
 - The `.dm-verity` keyring is an upstream Linux 7.0 interface backported to the
-  Kata 6.18 kernel. The `.ipe` keyring and `IPE_CONFIG` operation remain
-  experimental, local interfaces.
+  Kata 6.18 kernel. The `.ipe` keyring and fine-grained IPE control operations
+  remain experimental, local interfaces.
 - This remains a hybrid prototype: it generates and signs the IPE policy in the
   guest instead of embedding a static policy in the kernel.
 - The NVIDIA rootfs and GPU-extension builders UPX-compress most executable ELF

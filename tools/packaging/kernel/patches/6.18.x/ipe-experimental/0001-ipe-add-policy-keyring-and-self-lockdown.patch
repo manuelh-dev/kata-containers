@@ -14,19 +14,41 @@ index dc70884..9dd63b5 100644
  With openssl, the policy can be signed by::
  
     openssl smime -sign \
-@@ -590,6 +593,16 @@ as the first token. IPE supports the following operations:
+@@ -590,6 +593,38 @@ as the first token. IPE supports the following operations:
        Controls loading IMA certificates through the Kconfigs,
        ``CONFIG_IMA_X509_PATH`` and ``CONFIG_EVM_X509_PATH``.
  
-+   ``IPE_CONFIG``:
++   ``IPE_POLICY_LOAD``:
 +
-+      Controls writes to IPE's own securityfs control plane, including policy
-+      deployment, policy activation, policy update, policy deletion, and
-+      changes to enforcement and success auditing. It defaults to ``ALLOW``
-+      even when the global default is ``DENY``, so policy-controlled IPE
-+      lockdown is always an explicit opt-in. A rule such as
-+      ``op=IPE_CONFIG action=DENY`` makes the currently active policy
-+      immutable until reboot.
++      Controls deployment through the ``new_policy`` securityfs node.
++
++   ``IPE_POLICY_UPDATE``:
++
++      Controls updates through a deployed policy's ``update`` node.
++
++   ``IPE_POLICY_ACTIVATION``:
++
++      Controls activation through a deployed policy's ``active`` node.
++
++   ``IPE_POLICY_DELETE``:
++
++      Controls deletion through a deployed policy's ``delete`` node.
++
++   ``IPE_ENFORCEMENT_ON`` and ``IPE_ENFORCEMENT_OFF``:
++
++      Control the corresponding transition through the ``enforce`` node.
++
++   ``IPE_SUCCESS_AUDIT_ON`` and ``IPE_SUCCESS_AUDIT_OFF``:
++
++      Control the corresponding transition through the ``success_audit``
++      node.
++
++      These operations do not replace existing capability, signature,
++      version, or active-policy checks. They let the active policy provide an
++      additional, fine-grained decision for each existing securityfs action.
++      All control operations default to ``ALLOW`` independently of the global
++      default, so policy-controlled IPE lockdown is an explicit opt-in and
++      existing policies remain compatible.
 +
  action
  ~~~~~~
@@ -54,15 +76,22 @@ diff --git a/security/ipe/audit.c b/security/ipe/audit.c
 index de5fed6..416eb70 100644
 --- a/security/ipe/audit.c
 +++ b/security/ipe/audit.c
-@@ -41,6 +41,7 @@ static const char *const audit_op_names[__IPE_OP_MAX + 1] = {
+@@ -41,6 +41,14 @@ static const char *const audit_op_names[__IPE_OP_MAX + 1] = {
  	"KEXEC_INITRAMFS",
  	"POLICY",
  	"X509_CERT",
-+	"IPE_CONFIG",
++	"IPE_POLICY_LOAD",
++	"IPE_POLICY_UPDATE",
++	"IPE_POLICY_ACTIVATION",
++	"IPE_POLICY_DELETE",
++	"IPE_ENFORCEMENT_ON",
++	"IPE_ENFORCEMENT_OFF",
++	"IPE_SUCCESS_AUDIT_ON",
++	"IPE_SUCCESS_AUDIT_OFF",
  	"UNKNOWN",
  };
  
-@@ -50,6 +51,7 @@ static const char *const audit_hook_names[__IPE_HOOK_MAX] = {
+@@ -50,6 +58,7 @@ static const char *const audit_hook_names[__IPE_HOOK_MAX] = {
  	"MPROTECT",
  	"KERNEL_READ",
  	"KERNEL_LOAD",
@@ -74,22 +103,23 @@ diff --git a/security/ipe/eval.c b/security/ipe/eval.c
 index 21439c5..35bf6ff 100644
 --- a/security/ipe/eval.c
 +++ b/security/ipe/eval.c
-@@ -381,6 +381,21 @@ eval:
+@@ -381,6 +381,22 @@ eval:
  	return rc;
  }
  
 +/**
-+ * ipe_evaluate_config() - Evaluate an IPE securityfs configuration change.
++ * ipe_evaluate_config() - Evaluate an IPE securityfs control operation.
++ * @op: Supplies the fine-grained control operation being attempted.
 + *
 + * Callers must hold ipe_policy_lock across this decision and the associated
-+ * mutation. This makes the policy transition to an IPE_CONFIG lockdown
-+ * atomic with respect to later writers of IPE's control plane.
++ * mutation. This makes a policy's self-protection atomic with respect to
++ * later writers of IPE's control plane.
 + */
-+int ipe_evaluate_config(void)
++int ipe_evaluate_config(enum ipe_op_type op)
 +{
 +	struct ipe_eval_ctx ctx = IPE_EVAL_CTX_INIT;
 +
-+	ipe_build_eval_ctx(&ctx, NULL, IPE_OP_IPE_CONFIG, IPE_HOOK_CONFIG);
++	ipe_build_eval_ctx(&ctx, NULL, op, IPE_HOOK_CONFIG);
 +	return ipe_evaluate_event(&ctx);
 +}
 +
@@ -104,7 +134,7 @@ index fef65a3..a0a0a6d 100644
  			enum ipe_op_type op,
  			enum ipe_hook_type hook);
  int ipe_evaluate_event(const struct ipe_eval_ctx *const ctx);
-+int ipe_evaluate_config(void);
++int ipe_evaluate_config(enum ipe_op_type op);
  
  #endif /* _IPE_EVAL_H */
 diff --git a/security/ipe/fs.c b/security/ipe/fs.c
@@ -120,7 +150,7 @@ index 0bb9468..fc0ced4 100644
  
  	if (!file_ns_capable(f, &init_user_ns, CAP_MAC_ADMIN))
  		return -EPERM;
-@@ -39,7 +39,17 @@ static ssize_t setaudit(struct file *f, const char __user *data,
+@@ -39,7 +39,18 @@ static ssize_t setaudit(struct file *f, const char __user *data,
  	if (rc)
  		return rc;
  
@@ -128,7 +158,8 @@ index 0bb9468..fc0ced4 100644
 +	mutex_lock(&ipe_policy_lock);
 +	old_value = READ_ONCE(success_audit);
 +	if (value != old_value) {
-+		rc = ipe_evaluate_config();
++		rc = ipe_evaluate_config(value ? IPE_OP_IPE_SUCCESS_AUDIT_ON :
++					 IPE_OP_IPE_SUCCESS_AUDIT_OFF);
 +		if (!rc)
 +			WRITE_ONCE(success_audit, value);
 +	}
@@ -139,7 +170,7 @@ index 0bb9468..fc0ced4 100644
  
  	return len;
  }
-@@ -83,15 +93,22 @@ static ssize_t setenforce(struct file *f, const char __user *data,
+@@ -83,15 +94,23 @@ static ssize_t setenforce(struct file *f, const char __user *data,
  	if (!file_ns_capable(f, &init_user_ns, CAP_MAC_ADMIN))
  		return -EPERM;
  
@@ -153,7 +184,8 @@ index 0bb9468..fc0ced4 100644
  	if (new_value != old_value) {
 -		ipe_audit_enforce(new_value, old_value);
 -		WRITE_ONCE(enforce, new_value);
-+		rc = ipe_evaluate_config();
++		rc = ipe_evaluate_config(new_value ? IPE_OP_IPE_ENFORCEMENT_ON :
++					 IPE_OP_IPE_ENFORCEMENT_OFF);
 +		if (!rc) {
 +			ipe_audit_enforce(new_value, old_value);
 +			WRITE_ONCE(enforce, new_value);
@@ -165,12 +197,12 @@ index 0bb9468..fc0ced4 100644
  
  	return len;
  }
-@@ -145,22 +162,30 @@ static ssize_t new_policy(struct file *f, const char __user *data,
+@@ -145,22 +164,30 @@ static ssize_t new_policy(struct file *f, const char __user *data,
  		goto out;
  	}
  
 +	mutex_lock(&ipe_policy_lock);
-+	rc = ipe_evaluate_config();
++	rc = ipe_evaluate_config(IPE_OP_IPE_POLICY_LOAD);
 +	if (rc)
 +		goto out_unlock;
 +
@@ -306,7 +338,7 @@ index 1c58c29..fbc4ada 100644
 +	mutex_lock(&ipe_policy_lock);
 +	ap = rcu_dereference_protected(ipe_active_policy,
 +				       lockdep_is_held(&ipe_policy_lock));
-+	rc = ipe_evaluate_config();
++	rc = ipe_evaluate_config(IPE_OP_IPE_POLICY_UPDATE);
 +	if (rc) {
 +		mutex_unlock(&ipe_policy_lock);
 +		goto err;
@@ -372,7 +404,7 @@ index 1c58c29..fbc4ada 100644
  
  	ap = rcu_dereference_protected(ipe_active_policy,
  				       lockdep_is_held(&ipe_policy_lock));
-+	if (ipe_evaluate_config()) {
++	if (ipe_evaluate_config(IPE_OP_IPE_POLICY_ACTIVATION)) {
 +		mutex_unlock(&ipe_policy_lock);
 +		return -EACCES;
 +	}
@@ -383,16 +415,23 @@ diff --git a/security/ipe/policy.h b/security/ipe/policy.h
 index 5bfbdbd..826975a 100644
 --- a/security/ipe/policy.h
 +++ b/security/ipe/policy.h
-@@ -17,6 +17,8 @@ enum ipe_op_type {
+@@ -17,6 +17,15 @@ enum ipe_op_type {
  	IPE_OP_KEXEC_INITRAMFS,
  	IPE_OP_POLICY,
  	IPE_OP_X509,
 +	/* IPE's own securityfs control plane. */
-+	IPE_OP_IPE_CONFIG,
++	IPE_OP_IPE_POLICY_LOAD,
++	IPE_OP_IPE_POLICY_UPDATE,
++	IPE_OP_IPE_POLICY_ACTIVATION,
++	IPE_OP_IPE_POLICY_DELETE,
++	IPE_OP_IPE_ENFORCEMENT_ON,
++	IPE_OP_IPE_ENFORCEMENT_OFF,
++	IPE_OP_IPE_SUCCESS_AUDIT_ON,
++	IPE_OP_IPE_SUCCESS_AUDIT_OFF,
  	__IPE_OP_MAX,
  };
  
-@@ -89,6 +91,7 @@ struct ipe_policy {
+@@ -89,6 +98,7 @@ struct ipe_policy {
  
  struct ipe_policy *ipe_new_policy(const char *text, size_t textlen,
  				  const char *pkcs7, size_t pkcs7len);
@@ -408,7 +447,7 @@ index 9d92d8a..dac8ba9 100644
  	mutex_lock(&ipe_policy_lock);
  	ap = rcu_dereference_protected(ipe_active_policy,
  				       lockdep_is_held(&ipe_policy_lock));
-+	rc = ipe_evaluate_config();
++	rc = ipe_evaluate_config(IPE_OP_IPE_POLICY_DELETE);
 +	if (rc) {
 +		mutex_unlock(&ipe_policy_lock);
 +		inode_unlock(root);
@@ -421,24 +460,39 @@ diff --git a/security/ipe/policy_parser.c b/security/ipe/policy_parser.c
 index 7f27e39..7253eed 100644
 --- a/security/ipe/policy_parser.c
 +++ b/security/ipe/policy_parser.c
-@@ -43,6 +43,13 @@ static struct ipe_parsed_policy *new_parsed_policy(void)
- 		INIT_LIST_HEAD(&t->rules);
- 	}
- 
-+	/*
-+	 * IPE_CONFIG is explicitly opt-in. Existing policies may have a global
-+	 * DEFAULT DENY for integrity operations; interpreting that as an
-+	 * administrative lockdown would be incompatible and unrecoverable.
-+	 */
-+	p->rules[IPE_OP_IPE_CONFIG].default_action = IPE_ACTION_ALLOW;
-+
- 	return p;
- }
- 
-@@ -237,6 +244,7 @@ static const match_table_t operation_tokens = {
+@@ -237,5 +237,13 @@ static const match_table_t operation_tokens = {
  	{IPE_OP_KEXEC_INITRAMFS,	"op=KEXEC_INITRAMFS"},
  	{IPE_OP_POLICY,			"op=POLICY"},
  	{IPE_OP_X509,			"op=X509_CERT"},
-+	{IPE_OP_IPE_CONFIG,		"op=IPE_CONFIG"},
++	{IPE_OP_IPE_POLICY_LOAD,	"op=IPE_POLICY_LOAD"},
++	{IPE_OP_IPE_POLICY_UPDATE,	"op=IPE_POLICY_UPDATE"},
++	{IPE_OP_IPE_POLICY_ACTIVATION,	"op=IPE_POLICY_ACTIVATION"},
++	{IPE_OP_IPE_POLICY_DELETE,	"op=IPE_POLICY_DELETE"},
++	{IPE_OP_IPE_ENFORCEMENT_ON,	"op=IPE_ENFORCEMENT_ON"},
++	{IPE_OP_IPE_ENFORCEMENT_OFF,	"op=IPE_ENFORCEMENT_OFF"},
++	{IPE_OP_IPE_SUCCESS_AUDIT_ON,	"op=IPE_SUCCESS_AUDIT_ON"},
++	{IPE_OP_IPE_SUCCESS_AUDIT_OFF,	"op=IPE_SUCCESS_AUDIT_OFF"},
  	{IPE_OP_INVALID,		NULL}
  };
+@@ -492,0 +501,18 @@ static int validate_policy(const struct ipe_parsed_policy *p)
++static void set_control_defaults(struct ipe_parsed_policy *p)
++{
++	size_t i;
++
++	/*
++	 * IPE control-plane mediation is explicitly opt-in. Existing policies
++	 * may have a global DEFAULT DENY for integrity operations; interpreting
++	 * that as an administrative lockdown would be incompatible and could be
++	 * unrecoverable. Give each new operation an ALLOW default only when the
++	 * policy did not provide an explicit per-operation default.
++	 */
++	for (i = IPE_OP_IPE_POLICY_LOAD;
++	     i <= IPE_OP_IPE_SUCCESS_AUDIT_OFF; ++i) {
++		if (p->rules[i].default_action == IPE_ACTION_INVALID)
++			p->rules[i].default_action = IPE_ACTION_ALLOW;
++	}
++}
++
+@@ -545,0 +572,2 @@ int ipe_parse_policy(struct ipe_policy *p)
++	set_control_defaults(pp);
++

@@ -6,7 +6,8 @@
 //!
 //! The agent owns an ephemeral policy signer only during trusted guest setup.
 //! It provisions the corresponding public certificate into a dedicated IPE
-//! keyring, then activates a policy that denies subsequent IPE configuration.
+//! keyring, then activates a policy that denies each subsequent IPE control
+//! operation independently.
 
 use std::collections::BTreeSet;
 #[cfg(feature = "devicemapper")]
@@ -487,7 +488,18 @@ pub(crate) fn render_policy(hashes: &BTreeSet<VerityRootHash>) -> Result<String>
         ));
     }
     policy.push_str("op=EXECUTE dmverity_signature=TRUE action=ALLOW\n");
-    policy.push_str("op=IPE_CONFIG action=DENY\n");
+    for operation in [
+        "IPE_POLICY_LOAD",
+        "IPE_POLICY_UPDATE",
+        "IPE_POLICY_ACTIVATION",
+        "IPE_POLICY_DELETE",
+        "IPE_ENFORCEMENT_ON",
+        "IPE_ENFORCEMENT_OFF",
+        "IPE_SUCCESS_AUDIT_ON",
+        "IPE_SUCCESS_AUDIT_OFF",
+    ] {
+        policy.push_str(&format!("op={operation} action=DENY\n"));
+    }
 
     Ok(policy)
 }
@@ -545,7 +557,7 @@ fn ensure_securityfs() -> Result<()> {
 }
 
 /// Install and activate the generated policy, then let it lock its own IPE
-/// control plane through `op=IPE_CONFIG action=DENY`.
+/// control plane through fine-grained deny rules for every mutable interface.
 pub(crate) fn activate_and_lockdown(logger: &Logger) -> Result<()> {
     let cmdline = fs::read_to_string("/proc/cmdline").context("read kernel command line")?;
     let hashes = hashes_from_kernel_cmdline(&cmdline);
@@ -557,7 +569,7 @@ pub(crate) fn activate_and_lockdown(logger: &Logger) -> Result<()> {
 
     ensure_securityfs()?;
     // Enable enforcement before making the locking policy active. Once active,
-    // IPE_CONFIG denies a later attempt to change this value.
+    // The fine-grained control rules deny later attempts to change this value.
     write_securityfs(&format!("{IPE_ROOT}/enforce"), b"1").context("enable IPE enforcement")?;
     write_securityfs(&format!("{IPE_ROOT}/new_policy"), &signed_policy)
         .context("deploy prototype IPE policy")?;
@@ -602,7 +614,18 @@ mod tests {
         assert!(policy.contains("DEFAULT op=EXECUTE action=DENY"));
         assert!(policy.contains("dmverity_roothash=sha256:"));
         assert!(policy.contains("dmverity_signature=TRUE"));
-        assert!(policy.contains("op=IPE_CONFIG action=DENY"));
+        for operation in [
+            "IPE_POLICY_LOAD",
+            "IPE_POLICY_UPDATE",
+            "IPE_POLICY_ACTIVATION",
+            "IPE_POLICY_DELETE",
+            "IPE_ENFORCEMENT_ON",
+            "IPE_ENFORCEMENT_OFF",
+            "IPE_SUCCESS_AUDIT_ON",
+            "IPE_SUCCESS_AUDIT_OFF",
+        ] {
+            assert!(policy.contains(&format!("op={operation} action=DENY")));
+        }
     }
 
     #[test]
