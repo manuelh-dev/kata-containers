@@ -171,11 +171,12 @@ func (dv *directVolume) createVolume(volID, name string, cap int64, kind string)
 	}
 
 	volume := state.Volume{
-		VolID:   volID,
-		VolName: name,
-		VolSize: cap,
-		VolPath: path,
-		Kind:    kind,
+		VolID:    volID,
+		VolName:  name,
+		VolSize:  cap,
+		VolPath:  path,
+		Kind:     kind,
+		Metadata: map[string]string{},
 	}
 
 	klog.Infof("adding direct volume: %s = %+v", volID, volume)

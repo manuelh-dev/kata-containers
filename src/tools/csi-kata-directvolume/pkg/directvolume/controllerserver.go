@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/golang/protobuf/ptypes/wrappers"
@@ -79,6 +81,27 @@ func (dv *directVolume) CreateVolume(ctx context.Context, req *csi.CreateVolumeR
 			return nil, status.Errorf(codes.AlreadyExists, "Volume with the same name: %s but with different size already exist", req.GetName())
 		}
 
+		backingPath := exVol.Metadata["devicePath"]
+		if exVol.Metadata["type"] == utils.SpdkVolumeTypeName {
+			backingPath = exVol.Metadata["backingFile"]
+		} else if backingPath == "" {
+			backingPath, err = utils.GetDirectBlockDevicePath(
+				exVol.VolID,
+				strconv.FormatInt(exVol.VolSize, 10),
+				dv.config.StoragePath,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		backingInfo, err := os.Stat(backingPath)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "backing disk for existing volume %s is unavailable at %s: %v", exVol.VolID, backingPath, err)
+		}
+		if backingInfo.Size() < exVol.VolSize {
+			return nil, status.Errorf(codes.DataLoss, "backing disk for existing volume %s has size %d, expected at least %d", exVol.VolID, backingInfo.Size(), exVol.VolSize)
+		}
+
 		if contentSrc != nil {
 			volumeSource := req.VolumeContentSource
 			switch volumeSource.Type.(type) {
@@ -118,7 +141,26 @@ func (dv *directVolume) CreateVolume(ctx context.Context, req *csi.CreateVolumeR
 			klog.Errorf("failed to create volume %s: %v", volumeID, err)
 			return nil, err
 		}
-		klog.Infof("created volume %s at path %s", vol.VolID, vol.VolPath)
+
+		devicePath, createErr := utils.CreateDirectBlockDevice(
+			volumeID,
+			strconv.FormatInt(capacity, 10),
+			dv.config.StoragePath,
+		)
+		if createErr != nil {
+			_ = dv.deleteVolume(volumeID)
+			if storagePath, pathErr := utils.GetStoragePath(dv.config.StoragePath, volumeID); pathErr == nil {
+				_ = os.RemoveAll(storagePath)
+			}
+			return nil, status.Errorf(codes.Internal, "failed to provision backing disk for volume %s: %v", volumeID, createErr)
+		}
+		vol.Metadata["devicePath"] = *devicePath
+		if err := dv.state.UpdateVolume(*vol); err != nil {
+			_ = os.RemoveAll(filepath.Dir(*devicePath))
+			_ = dv.deleteVolume(volumeID)
+			return nil, err
+		}
+		klog.Infof("created volume %s with backing disk %s", vol.VolID, *devicePath)
 	}
 
 	if contentSrc != nil {
@@ -136,6 +178,11 @@ func (dv *directVolume) CreateVolume(ctx context.Context, req *csi.CreateVolumeR
 
 		if err != nil {
 			klog.V(4).Infof("VolumeSource error: %v", err)
+			if volumeCtx[utils.KataContainersDirectVolumeType] != utils.SpdkVolumeTypeName {
+				if storagePath, pathErr := utils.GetStoragePath(dv.config.StoragePath, volumeID); pathErr == nil {
+					_ = os.RemoveAll(storagePath)
+				}
+			}
 			if delErr := dv.deleteVolume(volumeID); delErr != nil {
 				klog.Infof("deleting direct volume %v failed: %v", volumeID, delErr)
 			}
@@ -181,7 +228,7 @@ func (dv *directVolume) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeR
 	if vol.Attached || !vol.Published.Empty() || !vol.Staged.Empty() {
 		msg := fmt.Sprintf("Volume '%s' is still used (attached: %v, staged: %v, published: %v) by '%s' node",
 			vol.VolID, vol.Attached, vol.Staged, vol.Published, vol.NodeID)
-		klog.Warning(msg)
+		return nil, status.Error(codes.FailedPrecondition, msg)
 	}
 
 	if vol.Metadata["type"] == utils.SpdkVolumeTypeName {
@@ -206,11 +253,20 @@ func (dv *directVolume) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeR
 
 		if backingFile != "" {
 			if err := os.Remove(backingFile); err != nil && !os.IsNotExist(err) {
-				klog.Warningf("Failed to remove backing file %s for volume %s: %v", backingFile, volId, err)
+				return nil, status.Errorf(codes.Internal, "failed to remove backing file %s for volume %s: %v", backingFile, volId, err)
 			} else {
 				klog.Infof("Removed backing file %s for volume %s", backingFile, volId)
 			}
 		}
+	} else {
+		storagePath, err := utils.GetStoragePath(dv.config.StoragePath, volId)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to resolve storage path for volume %s: %v", volId, err)
+		}
+		if err := os.RemoveAll(storagePath); err != nil && !os.IsNotExist(err) {
+			return nil, status.Errorf(codes.Internal, "failed to remove storage path %s for volume %s: %v", storagePath, volId, err)
+		}
+		klog.Infof("Removed storage path %s for volume %s", storagePath, volId)
 	}
 
 	if err := dv.deleteVolume(volId); err != nil {

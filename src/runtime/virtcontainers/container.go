@@ -686,6 +686,12 @@ func (c *Container) createBlockDevices(ctx context.Context) error {
 						continue
 					}
 					c.mounts[i].BlockDeviceCreateFs = createFs
+				case volume.StorageLifecycleMetadataKey:
+					if value != volume.StorageLifecyclePersistent {
+						c.Logger().Errorf("invalid storage lifecycle value %s provided for key %s", value, volume.StorageLifecycleMetadataKey)
+						continue
+					}
+					c.mounts[i].BlockDeviceStorageLifecycle = value
 				case volume.FSGroupMetadataKey:
 					gid, err := strconv.Atoi(value)
 					if err != nil {

@@ -19,7 +19,7 @@ use oci_spec::runtime as oci;
 use tokio::sync::RwLock;
 
 use crate::volume::{
-    direct_volumes::KATA_DIRECT_VOLUME_TYPE,
+    direct_volumes::{configure_storage_driver_options, KATA_DIRECT_VOLUME_TYPE},
     utils::{handle_block_volume, is_block_device_readonly},
     Volume,
 };
@@ -95,7 +95,7 @@ impl RawblockVolume {
             .await
             .context("do handle device failed.")?;
 
-        let block_volume = handle_block_volume(
+        let (mut storage, mount, device_id) = handle_block_volume(
             device_info,
             m,
             read_only,
@@ -105,11 +105,12 @@ impl RawblockVolume {
         )
         .await
         .context("do handle block volume failed")?;
+        configure_storage_driver_options(&mut storage, mount_info)?;
 
         Ok(Self {
-            storage: Some(block_volume.0),
-            mount: block_volume.1,
-            device_id: block_volume.2,
+            storage: Some(storage),
+            mount,
+            device_id,
         })
     }
 }

@@ -44,6 +44,12 @@ pub const KATA_VOLUME_OVERLAYFS_CREATE_DIR: &str =
 /// Key to request filesystem creation for a fresh block volume.
 pub const KATA_BLOCK_VOLUME_CREATE_FS: &str = "create_filesystem";
 
+/// Key used to describe a block volume's storage lifecycle.
+pub const KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE: &str = "storage_lifecycle";
+
+/// Value used to identify persistent block storage.
+pub const KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE_PERSISTENT: &str = "persistent";
+
 /// SANDBOX_BIND_MOUNTS_DIR is for sandbox bindmounts
 pub const SANDBOX_BIND_MOUNTS_DIR: &str = "sandbox-mounts";
 

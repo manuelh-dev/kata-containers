@@ -22,7 +22,9 @@ use oci_spec::runtime as oci;
 use tokio::sync::RwLock;
 
 use crate::volume::{
-    direct_volumes::{KATA_SPDK_VOLUME_TYPE, KATA_SPOOL_VOLUME_TYPE},
+    direct_volumes::{
+        configure_storage_driver_options, KATA_SPDK_VOLUME_TYPE, KATA_SPOOL_VOLUME_TYPE,
+    },
     utils::{
         build_bind_mount_options, filter_block_storage_options, generate_shared_path,
         DEFAULT_VOLUME_FS_TYPE, KATA_MOUNT_BIND_TYPE,
@@ -147,6 +149,7 @@ impl SPDKVolume {
         }
 
         storage.fs_group = None;
+        configure_storage_driver_options(&mut storage, mount_info)?;
         let mut oci_mount = oci::Mount::default();
         oci_mount.set_destination(m.destination().clone());
         oci_mount.set_typ(Some(KATA_MOUNT_BIND_TYPE.to_string()));

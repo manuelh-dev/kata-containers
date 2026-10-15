@@ -19,9 +19,12 @@ const (
 
 	EncryptionKeyMetadataKey       = "encryptionKey"
 	CreateFilesystemMetadataKey    = "createFilesystem"
+	StorageLifecycleMetadataKey    = "storageLifecycle"
+	StorageLifecyclePersistent     = "persistent"
 	FSGroupMetadataKey             = "fsGroup"
 	FSGroupChangePolicyMetadataKey = "fsGroupChangePolicy"
 	BlockVolumeCreateFsDriverKey   = "create_filesystem"
+	BlockVolumeLifecycleDriverKey  = "storage_lifecycle"
 )
 
 // FSGroupChangePolicy holds policies that will be used for applying fsGroup to a volume.

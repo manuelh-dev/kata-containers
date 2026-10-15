@@ -19,6 +19,10 @@ import (
 const (
 	mountInfoFileName        = "mountInfo.json"
 	kataDirectVolumeRootPath = "/run/kata-containers/shared/direct-volumes"
+
+	CreateFilesystemMetadataKey = "createFilesystem"
+	StorageLifecycleMetadataKey = "storageLifecycle"
+	StorageLifecyclePersistent  = "persistent"
 )
 
 // MountInfo contains the information needed by Kata to consume a host block device and mount it as a filesystem inside the guest VM.

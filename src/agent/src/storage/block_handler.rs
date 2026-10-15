@@ -16,7 +16,10 @@ use kata_types::device::DRIVER_BLK_CCW_TYPE;
 use kata_types::device::{
     DRIVER_BLK_MMIO_TYPE, DRIVER_BLK_PCI_TYPE, DRIVER_NVDIMM_TYPE, DRIVER_SCSI_TYPE,
 };
-use kata_types::mount::{StorageDevice, KATA_BLOCK_VOLUME_CREATE_FS};
+use kata_types::mount::{
+    StorageDevice, KATA_BLOCK_VOLUME_CREATE_FS, KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE,
+    KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE_PERSISTENT,
+};
 use nix::sys::stat::{major, minor};
 use protocols::agent::Storage;
 use tracing::instrument;
@@ -41,11 +44,13 @@ const EPHEMERAL_ENCRYPTION_DRIVER_OPTION: &str = "encryption_key=ephemeral";
 const MKFS_EXT4: &str = "mkfs.ext4";
 const BLOCK_EMPTYDIR_EXT4_MKFS_OPTS: [&str; 8] =
     ["-O", "^has_journal", "-m", "0", "-i", "163840", "-I", "128"];
+const BLOCK_PERSISTENT_EXT4_MKFS_OPTS: [&str; 2] = ["-m", "0"];
 
 #[derive(Debug, Eq, PartialEq)]
 struct BlockStorageDriverOptions {
     has_ephemeral_encryption: bool,
     should_create_filesystem: bool,
+    has_persistent_lifecycle: bool,
 }
 
 fn get_device_number(dev_path: &str, metadata: Option<&fs::Metadata>) -> Result<String> {
@@ -81,7 +86,12 @@ async fn handle_block_storage(
         new_device(storage.mount_point.clone())
     } else {
         if options.should_create_filesystem {
-            ensure_block_filesystem(logger, storage).await?;
+            let mkfs_options = if options.has_persistent_lifecycle {
+                &BLOCK_PERSISTENT_EXT4_MKFS_OPTS[..]
+            } else {
+                &BLOCK_EMPTYDIR_EXT4_MKFS_OPTS[..]
+            };
+            create_block_filesystem(logger, storage, mkfs_options).await?;
         }
         let path = common_storage_handler(logger, storage)?;
         new_device(path)
@@ -94,6 +104,13 @@ fn block_storage_driver_options(storage: &Storage) -> Result<BlockStorageDriverO
         .iter()
         .any(|opt| opt == EPHEMERAL_ENCRYPTION_DRIVER_OPTION);
     let should_create_filesystem = should_create_block_filesystem(storage);
+    let persistent_lifecycle_option = format!(
+        "{KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE}={KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE_PERSISTENT}"
+    );
+    let has_persistent_lifecycle = storage
+        .driver_options
+        .iter()
+        .any(|opt| opt == &persistent_lifecycle_option);
 
     if has_ephemeral_encryption && !should_create_filesystem {
         return Err(anyhow!(
@@ -102,10 +119,18 @@ fn block_storage_driver_options(storage: &Storage) -> Result<BlockStorageDriverO
             KATA_BLOCK_VOLUME_CREATE_FS
         ));
     }
+    if has_ephemeral_encryption && has_persistent_lifecycle {
+        return Err(anyhow!(
+            "{} cannot be combined with {}",
+            EPHEMERAL_ENCRYPTION_DRIVER_OPTION,
+            persistent_lifecycle_option
+        ));
+    }
 
     Ok(BlockStorageDriverOptions {
         has_ephemeral_encryption,
         should_create_filesystem,
+        has_persistent_lifecycle,
     })
 }
 
@@ -116,9 +141,13 @@ fn should_create_block_filesystem(storage: &Storage) -> bool {
         .any(|opt| opt == KATA_BLOCK_VOLUME_CREATE_FS)
 }
 
-async fn ensure_block_filesystem(logger: &Logger, storage: &Storage) -> Result<()> {
+async fn create_block_filesystem(
+    logger: &Logger,
+    storage: &Storage,
+    mkfs_options: &[&str],
+) -> Result<()> {
     match storage.fstype.as_str() {
-        "ext4" => ensure_ext4_filesystem(logger, &storage.source).await,
+        "ext4" => create_ext4_filesystem(logger, &storage.source, mkfs_options).await,
         _ => Err(anyhow!(
             "creating filesystem {} for block storage is unsupported",
             storage.fstype
@@ -126,22 +155,19 @@ async fn ensure_block_filesystem(logger: &Logger, storage: &Storage) -> Result<(
     }
 }
 
-async fn ensure_ext4_filesystem(logger: &Logger, source: &str) -> Result<()> {
-    // This option is emitted for block emptyDir volumes, whose backing device
-    // is ephemeral and freshly allocated for the pod.
+async fn create_ext4_filesystem(
+    logger: &Logger,
+    source: &str,
+    mkfs_options: &[&str],
+) -> Result<()> {
     info!(logger, "creating ext4 filesystem"; "source" => source);
     let output = {
         // Keep the agent SIGCHLD handler from reaping this child before
         // tokio::process observes it.
         let _locker = rustjail::container::WAIT_PID_LOCKER.lock().await;
-        // BLOCK_EMPTYDIR_EXT4_MKFS_OPTS mirrors CDH's EXT4_INTEGRITY_MKFS_OPTS
-        // from confidential-data-hub/hub/src/storage/volume_type/blockdevice/mod.rs.
-        // CDH's FsFormatter adds "-F" and its mapped device path separately in
-        // confidential-data-hub/hub/src/storage/drivers/filesystem.rs; here the
-        // agent invokes mkfs.ext4 directly, so add "-F" and source below.
         tokio::process::Command::new(MKFS_EXT4)
             .arg("-F")
-            .args(BLOCK_EMPTYDIR_EXT4_MKFS_OPTS)
+            .args(mkfs_options)
             .arg(source)
             .output()
             .await
@@ -184,6 +210,7 @@ mod tests {
             BlockStorageDriverOptions {
                 has_ephemeral_encryption: false,
                 should_create_filesystem: false,
+                has_persistent_lifecycle: false,
             }
         );
     }
@@ -199,6 +226,27 @@ mod tests {
             BlockStorageDriverOptions {
                 has_ephemeral_encryption: false,
                 should_create_filesystem: true,
+                has_persistent_lifecycle: false,
+            }
+        );
+    }
+
+    #[test]
+    fn block_storage_options_allow_persistent_fresh_storage() {
+        let lifecycle_option = format!(
+            "{KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE}={KATA_BLOCK_VOLUME_STORAGE_LIFECYCLE_PERSISTENT}"
+        );
+        let storage =
+            storage_with_driver_options(&[KATA_BLOCK_VOLUME_CREATE_FS, &lifecycle_option]);
+
+        let options = block_storage_driver_options(&storage).unwrap();
+
+        assert_eq!(
+            options,
+            BlockStorageDriverOptions {
+                has_ephemeral_encryption: false,
+                should_create_filesystem: true,
+                has_persistent_lifecycle: true,
             }
         );
     }
@@ -217,6 +265,7 @@ mod tests {
             BlockStorageDriverOptions {
                 has_ephemeral_encryption: true,
                 should_create_filesystem: true,
+                has_persistent_lifecycle: false,
             }
         );
     }

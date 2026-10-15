@@ -282,6 +282,10 @@ type Mount struct {
 	// fresh block volume. The filesystem type comes from the Storage Fstype.
 	BlockDeviceCreateFs bool
 
+	// BlockDeviceStorageLifecycle distinguishes persistent block storage from
+	// ephemeral storage when the guest creates the filesystem.
+	BlockDeviceStorageLifecycle string
+
 	// Shared indicates whether the mount is shared across containers.
 	Shared bool
 }

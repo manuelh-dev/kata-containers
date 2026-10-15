@@ -176,6 +176,17 @@ func GetStoragePath(storagePath, volID string) (string, error) {
 	return upperPath, nil
 }
 
+// GetDirectBlockDevicePath returns the path used for a direct volume's backing disk.
+func GetDirectBlockDevicePath(volID, capacityInBytesStr, storagePath string) (string, error) {
+	capacityInBytes, err := strconv.ParseInt(capacityInBytesStr, 10, 64)
+	if err != nil {
+		return "", status.Error(codes.Internal, err.Error())
+	}
+
+	diskSize := fmt.Sprintf("%dM", capacityInBytes/MiB)
+	return filepath.Join(storagePath, volID, fmt.Sprintf("directvol-rawdisk.%s", diskSize)), nil
+}
+
 // createVolume create the directory for the direct volume.
 // It returns the volume path or err if one occurs.
 func CreateDirectBlockDevice(volID, capacityInBytesStr, storagePath string) (*string, error) {
@@ -186,7 +197,6 @@ func CreateDirectBlockDevice(volID, capacityInBytesStr, storagePath string) (*st
 		return nil, errMsg
 	}
 
-	diskSize := fmt.Sprintf("%dM", capacityInBytes/MiB)
 	upperDir, err := SetupStoragePath(storagePath, volID)
 	if err != nil {
 		klog.Errorf("setup storage path failed with error: %v", err)
@@ -199,7 +209,10 @@ func CreateDirectBlockDevice(volID, capacityInBytesStr, storagePath string) (*st
 	}
 
 	// storagePath/62a268d9-893a-11ee-97cb-d89d6725e7b0/directvol-rawdisk.2048M
-	devicePath := filepath.Join(*upperDir, fmt.Sprintf("directvol-rawdisk.%s", diskSize))
+	devicePath, err := GetDirectBlockDevicePath(volID, capacityInBytesStr, storagePath)
+	if err != nil {
+		return nil, err
+	}
 	if _, err = os.Stat(devicePath); !os.IsNotExist(err) {
 		klog.Warning("direct block device exists, just skip creating it.")
 		return &devicePath, nil
@@ -219,10 +232,10 @@ func CreateDirectBlockDevice(volID, capacityInBytesStr, storagePath string) (*st
 		return nil, err
 	}
 
-	// fallocate -z -l diskSize filePath
+	// Allocate the exact requested capacity.
 	fallocateCmd := "fallocate"
 	// TODO: "-z" to be added
-	args := []string{"-l", diskSize, devicePath}
+	args := []string{"-l", strconv.FormatInt(capacityInBytes, 10), devicePath}
 	if _, err := doSafeCommand(fallocateCmd, args...); err != nil {
 		klog.Infof("do fallocate %v failed with error(%v)", args, err)
 		return nil, err

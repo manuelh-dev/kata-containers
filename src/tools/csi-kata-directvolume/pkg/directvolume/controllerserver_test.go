@@ -127,3 +127,65 @@ func TestSPDKVolume(t *testing.T) {
 	_, err = dv.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: volID})
 	require.NoError(t, err)
 }
+
+func TestDirectVolumeBackingLifecycle(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := Config{
+		DriverName:    "directvolume.csi.katacontainers.io",
+		Endpoint:      "unix:///tmp/fake.sock",
+		NodeID:        "node-test",
+		StoragePath:   filepath.Join(tmp, "stor"),
+		StateDir:      filepath.Join(tmp, "st"),
+		MaxVolumeSize: 1 << 40,
+		SpdkRawPath:   filepath.Join(tmp, "spdk-raw"),
+		SpdkVhostPath: filepath.Join(tmp, "spdk-vhost"),
+	}
+	dv, err := NewDirectVolumeDriver(cfg)
+	require.NoError(t, err)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "vol-direct",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 8 << 20,
+		},
+		Parameters: map[string]string{
+			utils.KataContainersDirectVolumeType: utils.DirectVolumeTypeName,
+			utils.KataContainersDirectFsType:     "ext4",
+		},
+		VolumeCapabilities: []*csi.VolumeCapability{mountCap()},
+	}
+	resp, err := dv.CreateVolume(context.TODO(), req)
+	require.NoError(t, err)
+	volID := resp.GetVolume().GetVolumeId()
+
+	vol, err := dv.state.GetVolumeByID(volID)
+	require.NoError(t, err)
+	backing := vol.Metadata["devicePath"]
+	require.NotEmpty(t, backing)
+	info, err := os.Stat(backing)
+	require.NoError(t, err)
+	require.EqualValues(t, 8<<20, info.Size())
+
+	marker := []byte("persistent marker")
+	file, err := os.OpenFile(backing, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.Write(marker)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	retry, err := dv.CreateVolume(context.TODO(), req)
+	require.NoError(t, err)
+	require.Equal(t, volID, retry.GetVolume().GetVolumeId())
+	data := make([]byte, len(marker))
+	file, err = os.Open(backing)
+	require.NoError(t, err)
+	_, err = file.Read(data)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.Equal(t, marker, data)
+
+	_, err = dv.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: volID})
+	require.NoError(t, err)
+	_, err = os.Stat(backing)
+	require.True(t, os.IsNotExist(err), "backing disk should be removed by DeleteVolume")
+}

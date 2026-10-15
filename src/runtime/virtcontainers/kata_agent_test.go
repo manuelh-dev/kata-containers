@@ -360,6 +360,27 @@ func TestHandleDeviceBlockVolume(t *testing.T) {
 		{
 			BlockDeviceDriver: config.VirtioBlock,
 			inputMount: Mount{
+				BlockDeviceCreateFs:         true,
+				BlockDeviceStorageLifecycle: volume.StorageLifecyclePersistent,
+			},
+			inputDev: &drivers.BlockDevice{
+				BlockDrive: &config.BlockDrive{
+					PCIPath:  testPCIPath,
+					VirtPath: testVirtPath,
+				},
+			},
+			resultVol: &pb.Storage{
+				Driver: kataBlkDevType,
+				Source: testPCIPath.String(),
+				DriverOptions: []string{
+					volume.BlockVolumeCreateFsDriverKey,
+					volume.BlockVolumeLifecycleDriverKey + "=" + volume.StorageLifecyclePersistent,
+				},
+			},
+		},
+		{
+			BlockDeviceDriver: config.VirtioBlock,
+			inputMount: Mount{
 				EncryptionKey:       "ephemeral",
 				BlockDeviceCreateFs: true,
 			},
