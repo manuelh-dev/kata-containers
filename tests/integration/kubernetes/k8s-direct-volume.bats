@@ -17,7 +17,38 @@ host_allocated_bytes() {
 	exec_host "${node}" "du -s -B1 '${path}' | awk 'NR == 1 {print \$1}'"
 }
 
+prepare_direct_volume() {
+	local size="$1"
+
+	exec_host "${node}" "set -e; \
+		rm -rf '${volume_path}' '${disk_path}'; \
+		mkdir -p '${volume_path}'; \
+		truncate -s '${size}' '${disk_path}'; \
+		mkfs.ext4 -F -q '${disk_path}'; \
+		/opt/kata/bin/kata-ctl direct-volume add '${volume_path}' '${mount_info}'; \
+		sync; \
+		echo direct-volume-ready" | grep -qx direct-volume-ready
+}
+
+start_direct_volume_pod() {
+	kubectl apply -f "${yaml_file}"
+	kubectl wait --for=condition=Ready --timeout="${timeout}" pod "${pod_name}"
+}
+
+assert_guest_direct_volume() {
+	local fs_type
+	local mount_source
+
+	read -r fs_type mount_source < <(pod_exec "${pod_name}" sh -c "${mount_probe}")
+	info "direct-volume guest mount: fs=${fs_type}, source=${mount_source}"
+	[[ "${fs_type}" == "ext4" ]]
+	[[ "${mount_source}" == /dev/* ]]
+}
+
 setup() {
+	# runtime-go currently blocks DAV when disable_block_device_use=true; runtime-rs is unaffected.
+	# See https://github.com/kata-containers/kata-containers/pull/13663 and
+	# https://github.com/kata-containers/kata-containers/pull/13682.
 	is_runtime_rs || skip "Direct volumes are tested only with runtime-rs"
 	is_confidential_runtime_class && \
 		skip "Direct volumes are not supported for confidential runtime classes"
@@ -32,8 +63,10 @@ setup() {
 	exec_host "${node}" \
 		"for tool in mkfs.ext4 truncate; do command -v \${tool} >/dev/null || exit 1; done" || \
 		die "Direct-volume filesystem tools are not installed on ${node}"
+	exec_host "${node}" "test -x /opt/kata/bin/kata-ctl" || \
+		die "kata-ctl is not installed on ${node}; install the kata-tools bundle"
 
-	pod_name="direct-volume-sparse"
+	pod_name="direct-volume"
 	mountpoint="/data"
 	volume_id="$(printf '%s' "${BATS_TEST_TMPDIR}" | sha256sum | cut -c1-12)"
 	volume_path="/tmp/kata-direct-volume-${volume_id}"
@@ -48,21 +81,21 @@ setup() {
 	mount_probe="awk -v mp='${mountpoint}' '\$5 == mp {for (i = 1; i <= NF; i++) if (\$i == \"-\") {print \$(i + 1), \$(i + 2); exit}}' /proc/self/mountinfo"
 }
 
+@test "Direct-assigned volume is mounted in the guest" {
+	prepare_direct_volume 64M
+	start_direct_volume_pod
+	assert_guest_direct_volume
+
+	pod_exec "${pod_name}" sh -c \
+		"printf '%s\n' direct-volume-ready > '${mountpoint}/probe' && grep -qx direct-volume-ready '${mountpoint}/probe'"
+}
+
 @test "Direct volume backing file remains sparse" {
 	local allocated_after
 	local allocated_before
 	local apparent_size
-	local fs_type
-	local mount_source
 
-	exec_host "${node}" "set -e; \
-		rm -rf '${volume_path}' '${disk_path}'; \
-		mkdir -p '${volume_path}'; \
-		truncate -s 256M '${disk_path}'; \
-		mkfs.ext4 -F -q '${disk_path}'; \
-		/opt/kata/bin/kata-ctl direct-volume add '${volume_path}' '${mount_info}'; \
-		sync; \
-		echo direct-volume-ready" | grep -qx direct-volume-ready
+	prepare_direct_volume 256M
 
 	apparent_size="$(exec_host "${node}" "stat -c %s '${disk_path}'")"
 	allocated_before="$(host_allocated_bytes "${disk_path}")"
@@ -70,13 +103,8 @@ setup() {
 	info "direct-volume allocated bytes before attach: ${allocated_before}"
 	(( allocated_before < apparent_size / 2 )) || die "Test backing file is not sparse before attach"
 
-	kubectl apply -f "${yaml_file}"
-	kubectl wait --for=condition=Ready --timeout="${timeout}" pod "${pod_name}"
-
-	read -r fs_type mount_source < <(pod_exec "${pod_name}" sh -c "${mount_probe}")
-	info "direct-volume guest mount: fs=${fs_type}, source=${mount_source}"
-	[[ "${fs_type}" == "ext4" ]]
-	[[ "${mount_source}" == /dev/* ]]
+	start_direct_volume_pod
+	assert_guest_direct_volume
 
 	exec_host "${node}" sync
 	allocated_after="$(host_allocated_bytes "${disk_path}")"
