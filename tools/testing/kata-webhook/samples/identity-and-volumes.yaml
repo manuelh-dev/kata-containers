@@ -1,0 +1,103 @@
+# Copyright (c) 2026 NVIDIA Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: policy-input-demo
+  namespace: default
+data:
+  message: hello-from-configmap
+  application.conf: |
+    mode=prototype
+    feature.watchdog=true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: policy-input-demo
+  namespace: default
+type: Opaque
+data:
+  username: ZGVtby11c2Vy
+  token: bm90LWEtcmVhbC1zZWNyZXQ=
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cuda-vectoradd-kata-snp-policy-debug
+  namespace: default
+spec:
+  runtimeClassName: kata-qemu-nvidia-gpu-snp-runtime-rs-devkit
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 2000
+    supplementalGroups:
+      - 3000
+      - 4000
+    fsGroup: 5000
+  containers:
+    - name: identity-and-volumes
+      image: quay.io/prometheus/busybox:latest
+      command:
+        - /bin/sh
+        - -c
+      args:
+        - |
+          set -eu
+          id
+          test "$(cat /etc/demo-config/message)" = "hello-from-configmap"
+          test "$(cat /etc/demo-secret/username)" = "demo-user"
+          test "${CONFIG_MESSAGE}" = "hello-from-configmap"
+          test "${SECRET_USERNAME}" = "demo-user"
+          printf '%s\n' "watchdog sample is running" > /work/status
+          sleep 3600
+      env:
+        - name: CONFIG_MESSAGE
+          valueFrom:
+            configMapKeyRef:
+              name: policy-input-demo
+              key: message
+        - name: SECRET_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: policy-input-demo
+              key: username
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: work
+          mountPath: /work
+        - name: config
+          mountPath: /etc/demo-config
+          readOnly: true
+        - name: secret
+          mountPath: /etc/demo-secret
+          readOnly: true
+  volumes:
+    - name: work
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi
+    - name: config
+      configMap:
+        name: policy-input-demo
+    - name: secret
+      secret:
+        secretName: policy-input-demo
+        defaultMode: 288

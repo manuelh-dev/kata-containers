@@ -4,6 +4,7 @@ module module-path
 go 1.26.10
 
 require (
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/sirupsen/logrus v1.9.4
 	github.com/slok/kubewebhook/v2 v2.5.0
 	k8s.io/api v0.29.0

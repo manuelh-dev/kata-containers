@@ -169,6 +169,50 @@ func TestAnnotatePodMutator(t *testing.T) {
 	}
 }
 
+func TestAnnotatePodMutatorInjectsPodSpecWithExplicitRuntime(t *testing.T) {
+	annotation, err := encodeInitData(&initData{
+		Version:   "0.1.0",
+		Algorithm: "sha256",
+		Data:      map[string]string{"policy.rego": "package agent_policy\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeClass := "kata-qemu"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "testing-namespace",
+			Annotations: map[string]string{initDataAnnotation: annotation},
+		},
+		Spec: corev1.PodSpec{
+			RuntimeClassName: &runtimeClass,
+			Containers:       []corev1.Container{{Name: "workload", Image: "example.com/workload"}},
+		},
+	}
+	whPolicy = &policy{}
+
+	result, err := annotatePodMutator(
+		context.Background(),
+		&kwhmodel.AdmissionReview{Namespace: pod.Namespace},
+		pod,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MutatedObject == nil {
+		t.Fatal("expected PodSpec injection to mutate the pod")
+	}
+
+	data, err := decodeInitData(pod.Annotations[initDataAnnotation])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Data[podSpecDataKey] == "" {
+		t.Fatal("PodSpec was not added to init-data")
+	}
+}
+
 func ptr[T any](v T) *T {
 	return &v
 }

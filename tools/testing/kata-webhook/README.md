@@ -68,6 +68,105 @@ those with
 * `hostNetwork: true`
 * namespace: `rook-ceph` and `rook-ceph-system`
 
+## Injecting a PodSpec into existing init-data
+
+When a Pod already has the
+`io.katacontainers.config.hypervisor.cc_init_data` annotation, the webhook also
+adds the admission-time `PodSpec` JSON to `data["pod-spec.json"]` in the
+compressed init-data TOML. Existing entries such as `policy.rego` are
+preserved.
+
+This is a prototype: scope its webhook registration to Pods that already have
+the init-data annotation, and use `reinvocationPolicy: IfNeeded`. It does not
+solve webhook finality if another mutating webhook changes the Pod after this
+one.
+
+The complete NVIDIA SNP prototype recipe can be run locally on a development
+machine hosting a single-node Kubernetes cluster. The cluster must have a
+working `kata-qemu-nvidia-gpu-snp-runtime-rs-devkit` RuntimeClass, the NVIDIA
+GPU Operator configured for confidential computing, and an allocatable
+`nvidia.com/pgpu` device.
+
+Run each stage in sequence:
+
+```bash
+make prototype-prepare-tools
+make prototype-build
+make prototype-deploy-webhook
+make prototype-generate-policy
+make prototype-deploy-pod
+make prototype-inspect
+```
+
+Alternatively, run the complete sequence:
+
+```bash
+make prototype-all
+```
+
+### Pod manifest samples
+
+The default input is
+[`samples/nvidia-gpu-snp.yaml`](samples/nvidia-gpu-snp.yaml). The recipe copies
+the input into the normally ignored `artifacts/` directory before genpolicy
+adds the init-data annotation, so the source manifest remains unchanged.
+
+Select another sample or an external Pod manifest with `POD_SOURCE`:
+
+```bash
+export POD_SOURCE=/path/to/pod.yaml
+make prototype-all
+```
+
+The input must contain one Pod using the prototype's expected name, `default`
+namespace, and `kata-qemu-nvidia-gpu-snp-runtime-rs-devkit` RuntimeClass.
+Additional manifests can be collected under `samples/`.
+
+The self-contained `samples/identity-and-volumes.yaml` example creates its own
+ConfigMap and Secret. Its single container exercises `emptyDir`, ConfigMap, and
+Secret mounts together with explicit user, group, supplemental groups, and
+`fsGroup` settings:
+
+```bash
+POD_SOURCE=samples/identity-and-volumes.yaml make prototype-all
+```
+
+A captured run of this sample is checked in under
+`artifacts/identity-and-volumes/`.
+
+The existing `make all` target remains build-only and does not modify a
+cluster. Use `make prototype-cleanup` to remove the prototype Pod and webhook.
+The underlying script also accepts the same stages as subcommands; run it
+without arguments to list them.
+
+The inspection stage prints the captured data and leaves byte-for-byte copies
+of the guest files under `artifacts/<pod-name>-<timestamp>/guest-root/`. It
+also extracts the embedded PodSpec and each image configuration into convenient
+standalone JSON files:
+
+```text
+artifacts/<pod-name>-<timestamp>/
+├── SHA256SUMS
+├── guest-root/
+│   └── run/
+│       ├── confidential-containers/initdata/initdata.toml
+│       └── kata-containers/
+│           ├── <container-id>/config.json
+│           └── image/meta_store.json
+├── image-configs/
+│   └── <image-digest>/
+│       ├── image-config.json
+│       ├── image-meta.json
+│       └── reference.txt
+└── pod-spec.json
+```
+
+`meta_store.json` is the durable guest-pull image metadata database. Its
+`image_db[*].image_config` entries contain the OCI image configurations used to
+create the container bundles. The per-image files under `image-configs/` are
+derived from that exact captured database. Set `ARTIFACT_DIR` to choose a
+fixed output directory.
+
 ## Enforcing a minimum memory limit
 
 Kata pods run inside a VM, so a memory limit that is comfortable under `runc`
