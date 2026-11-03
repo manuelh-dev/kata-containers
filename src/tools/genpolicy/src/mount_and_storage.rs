@@ -11,8 +11,12 @@ use crate::policy;
 use crate::settings;
 use crate::volume;
 
+use kata_types::annotations::block_device_mount::{
+    parse_block_device_mounts, BlockDeviceMount, BLOCK_DEVICE_MOUNTS_ANNOTATION,
+};
 use log::debug;
 use protocols::agent;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::str;
@@ -100,6 +104,77 @@ fn adjust_termination_path(mount: &mut policy::KataMount, yaml_container: &pod::
         if let Some(path) = &yaml_container.terminationMessagePath {
             mount.destination.clone_from(path);
         }
+    }
+}
+
+pub fn get_annotated_block_device_mounts(
+    annotations: &Option<BTreeMap<String, String>>,
+    yaml_container: &pod::Container,
+) -> Vec<BlockDeviceMount> {
+    let Some(value) = annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(BLOCK_DEVICE_MOUNTS_ANNOTATION))
+    else {
+        return Vec::new();
+    };
+    let config = parse_block_device_mounts(value).unwrap_or_else(|e| {
+        panic!("{BLOCK_DEVICE_MOUNTS_ANNOTATION}: {e}");
+    });
+
+    config
+        .mounts
+        .into_iter()
+        .filter(|mount| mount.container == yaml_container.name)
+        .inspect(|mount| {
+            let matches = yaml_container
+                .volumeDevices
+                .as_ref()
+                .map(|devices| {
+                    devices
+                        .iter()
+                        .filter(|device| {
+                            device.name == mount.volume && device.devicePath == mount.device_path
+                        })
+                        .count()
+                })
+                .unwrap_or_default();
+            if matches != 1 {
+                panic!(
+                    "{BLOCK_DEVICE_MOUNTS_ANNOTATION}: volume {} for container {} must match \
+                     exactly one volumeDevice named {} at {}; found {}",
+                    mount.volume, mount.container, mount.volume, mount.device_path, matches
+                );
+            }
+        })
+        .collect()
+}
+
+pub fn add_annotated_block_device_mounts(
+    p_mounts: &mut Vec<policy::KataMount>,
+    storages: &mut Vec<agent::Storage>,
+    mounts: &[BlockDeviceMount],
+) {
+    for mount in mounts {
+        let mut mount_options = mount.mount_options.clone();
+        mount_options.push("bind".to_string());
+        p_mounts.push(policy::KataMount {
+            destination: mount.mount_path.clone(),
+            source: String::new(),
+            type_: "bind".to_string(),
+            options: mount_options,
+        });
+
+        storages.push(agent::Storage {
+            driver: String::new(),
+            driver_options: Vec::new(),
+            source: String::new(),
+            fstype: mount.fs_type.clone(),
+            options: mount.mount_options.clone(),
+            mount_point: "$(spath)/$(b64_device_id)".to_string(),
+            fs_group: protobuf::MessageField::none(),
+            shared: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        });
     }
 }
 

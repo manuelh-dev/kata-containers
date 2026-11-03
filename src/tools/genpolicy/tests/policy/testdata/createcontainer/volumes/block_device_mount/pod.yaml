@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: block-device-mount
+  annotations:
+    io.katacontainers.experimental.block-device-mounts: >-
+      {"mounts":[{"container":"app","volume":"data","devicePath":"/dev/kata-data","mountPath":"/data","fsType":"ext4"}]}
+spec:
+  runtimeClassName: kata
+  containers:
+    - name: app
+      image: registry.k8s.io/pause:3.6@sha256:3d380ca8864549e74af4b29c10f9cb0956236dfb01c40ca076fb6c37253234db
+      volumeDevices:
+        - name: data
+          devicePath: /dev/kata-data
+      securityContext:
+        runAsUser: 65535
+        runAsGroup: 0
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: data

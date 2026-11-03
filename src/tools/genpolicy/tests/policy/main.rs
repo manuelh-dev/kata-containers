@@ -414,6 +414,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_container_volumes_block_device_mount() {
+        runtests("createcontainer/volumes/block_device_mount").await;
+    }
+
+    #[tokio::test]
     async fn test_create_container_volumes_config_map() {
         runtests("createcontainer/volumes/config_map").await;
     }

@@ -730,6 +730,15 @@ impl AgentPolicy {
             yaml_container,
             &self.config.settings,
         );
+        let annotated_block_mounts = mount_and_storage::get_annotated_block_device_mounts(
+            resource.get_annotations(),
+            yaml_container,
+        );
+        mount_and_storage::add_annotated_block_device_mounts(
+            &mut mounts,
+            &mut storages,
+            &annotated_block_mounts,
+        );
 
         let mut linux = containerd::get_linux(is_privileged);
         linux.Namespaces = get_kata_namespaces(is_pause_container, use_host_network);
@@ -753,6 +762,12 @@ impl AgentPolicy {
         let mut devices: Vec<agent::Device> = vec![];
         if let Some(volumeDevices) = &yaml_container.volumeDevices {
             for volumeDevice in volumeDevices {
+                if annotated_block_mounts
+                    .iter()
+                    .any(|mount| mount.device_path == volumeDevice.devicePath)
+                {
+                    continue;
+                }
                 if volumeDevice
                     .devicePath
                     .starts_with(&self.config.settings.devices.vfio.device_path)
