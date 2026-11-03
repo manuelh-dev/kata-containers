@@ -18,7 +18,12 @@ pub mod direct_volume;
 use crate::volume::{direct_volume::is_direct_volume, share_fs_volume::VolumeManager};
 pub mod direct_volumes;
 
-use std::{sync::Arc, vec::Vec};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+    vec::Vec,
+};
 
 use self::hugepage::{get_huge_page_limits_map, get_huge_page_option};
 use crate::{share_fs::ShareFs, volume::block_volume::is_block_volume};
@@ -27,7 +32,13 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use hypervisor::device::device_manager::DeviceManager;
 use kata_sys_util::{k8s::is_disk_empty_dir, mount::get_mount_options};
-use oci_spec::runtime as oci;
+use kata_types::{
+    annotations::block_device_mount::{
+        parse_block_device_mounts, BlockDeviceMount, BLOCK_DEVICE_MOUNTS_ANNOTATION,
+    },
+    k8s,
+};
+use oci_spec::runtime::{self as oci, LinuxDeviceType};
 use tokio::sync::RwLock;
 
 const BIND: &str = "bind";
@@ -78,7 +89,7 @@ impl VolumeResource {
         &self,
         ctx: &VolumeContext<'_>,
         cid: &str,
-        spec: &oci::Spec,
+        spec: &mut oci::Spec,
     ) -> Result<Vec<Arc<dyn Volume>>> {
         let mut volumes = vec![];
         if let Err(e) = self.add_volumes(ctx, cid, spec, &mut volumes).await {
@@ -97,9 +108,10 @@ impl VolumeResource {
         &self,
         ctx: &VolumeContext<'_>,
         cid: &str,
-        spec: &oci::Spec,
+        spec: &mut oci::Spec,
         volumes: &mut Vec<Arc<dyn Volume>>,
     ) -> Result<()> {
+        let annotated_plans = annotated_block_device_plans(spec)?;
         let share_fs = ctx.share_fs;
         let d = ctx.d;
         let sid = ctx.sid;
@@ -202,6 +214,47 @@ impl VolumeResource {
             inner.volumes.push(volume);
         }
 
+        let mut transformed_device_paths = HashSet::new();
+        for plan in annotated_plans {
+            let mut mount = oci::Mount::default();
+            mount.set_destination(PathBuf::from(&plan.config.mount_path));
+            mount.set_typ(Some(BIND.to_string()));
+            mount.set_options(Some(plan.config.mount_options.clone()));
+
+            let volume: Arc<dyn Volume> = Arc::new(
+                block_volume::BlockVolume::new_annotated(
+                    d,
+                    &mount,
+                    (plan.major, plan.minor),
+                    plan.read_only,
+                    sid,
+                    &plan.config.fs_type,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "mount annotated block device {} for volume {}",
+                        plan.config.device_path, plan.config.volume
+                    )
+                })?,
+            );
+            transformed_device_paths.insert(plan.config.device_path);
+            volumes.push(volume.clone());
+            self.inner.write().await.volumes.push(volume);
+        }
+
+        if !transformed_device_paths.is_empty() {
+            let linux = spec
+                .linux_mut()
+                .as_mut()
+                .context("OCI spec missing linux field")?;
+            let mut devices = linux.devices().clone().unwrap_or_default();
+            devices.retain(|device| {
+                !transformed_device_paths.contains(&device.path().display().to_string())
+            });
+            linux.set_devices(Some(devices));
+        }
+
         Ok(())
     }
 
@@ -248,6 +301,91 @@ impl VolumeResource {
     }
 }
 
+#[derive(Debug)]
+struct AnnotatedBlockDevicePlan {
+    config: BlockDeviceMount,
+    major: i64,
+    minor: i64,
+    read_only: bool,
+}
+
+fn annotated_block_device_plans(spec: &oci::Spec) -> Result<Vec<AnnotatedBlockDevicePlan>> {
+    let annotation = match spec
+        .annotations()
+        .as_ref()
+        .and_then(|annotations| annotations.get(BLOCK_DEVICE_MOUNTS_ANNOTATION))
+    {
+        Some(annotation) => annotation,
+        None => return Ok(Vec::new()),
+    };
+    let config = parse_block_device_mounts(annotation).map_err(|e| anyhow!(e))?;
+    let container_name = k8s::container_name(spec);
+    let mounts = spec.mounts().clone().unwrap_or_default();
+    let linux = spec
+        .linux()
+        .as_ref()
+        .context("OCI spec missing linux field")?;
+    let devices = linux.devices().clone().unwrap_or_default();
+
+    let mut plans = Vec::new();
+    for mount in config
+        .mounts
+        .into_iter()
+        .filter(|mount| mount.container == container_name)
+    {
+        if mounts
+            .iter()
+            .any(|existing| existing.destination().as_path() == Path::new(&mount.mount_path))
+        {
+            return Err(anyhow!(
+                "block-device-mount destination {} conflicts with an OCI mount",
+                mount.mount_path
+            ));
+        }
+
+        let matching: Vec<_> = devices
+            .iter()
+            .filter(|device| {
+                device.typ() == LinuxDeviceType::B
+                    && device.path().display().to_string() == mount.device_path
+            })
+            .collect();
+        if matching.len() != 1 {
+            return Err(anyhow!(
+                "block-device-mount volume {} expected exactly one block device at {}, found {}",
+                mount.volume,
+                mount.device_path,
+                matching.len()
+            ));
+        }
+        let device = matching[0];
+        let read_only = crate::manager_inner::device_cgroup_access_is_readonly(
+            linux,
+            LinuxDeviceType::B,
+            device.major(),
+            device.minor(),
+        ) || crate::manager_inner::block_device_node_is_readonly(
+            device.major(),
+            device.minor(),
+        );
+        if read_only && !mount.mount_options.iter().any(|option| option == "ro") {
+            return Err(anyhow!(
+                "block-device-mount volume {} is read-only; mountOptions must include ro",
+                mount.volume
+            ));
+        }
+
+        plans.push(AnnotatedBlockDevicePlan {
+            config: mount,
+            major: device.major(),
+            minor: device.minor(),
+            read_only,
+        });
+    }
+
+    Ok(plans)
+}
+
 /// Indicates whether a mount needs to be a local volume, i.e. created
 /// inside the guest instead of being shared from the host.
 ///
@@ -273,6 +411,9 @@ fn is_skip_volume(_m: &oci::Mount) -> bool {
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use oci_spec::runtime::{LinuxBuilder, LinuxDeviceBuilder, SpecBuilder};
 
     #[tokio::test]
     async fn failed_ephemeral_disk_removal_is_reported() {
@@ -292,5 +433,50 @@ mod cleanup_tests {
         );
 
         assert!(resource.cleanup_ephemeral_disks().await.is_err());
+    }
+
+    fn annotated_spec(device_path: &str) -> oci::Spec {
+        let annotation = format!(
+            r#"{{"mounts":[{{"container":"app","volume":"data","devicePath":"{device_path}","mountPath":"/data","fsType":"ext4","mountOptions":["nosuid"]}}]}}"#
+        );
+        let device = LinuxDeviceBuilder::default()
+            .path(PathBuf::from("/dev/kata-data"))
+            .typ(LinuxDeviceType::B)
+            .major(8_i64)
+            .minor(0_i64)
+            .build()
+            .unwrap();
+        SpecBuilder::default()
+            .annotations(HashMap::from([
+                (
+                    kata_types::annotations::cri_containerd::CONTAINER_NAME_LABEL_KEY.to_string(),
+                    "app".to_string(),
+                ),
+                (BLOCK_DEVICE_MOUNTS_ANNOTATION.to_string(), annotation),
+            ]))
+            .linux(
+                LinuxBuilder::default()
+                    .devices(vec![device])
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn annotation_matches_linux_block_device() {
+        let plans = annotated_block_device_plans(&annotated_spec("/dev/kata-data")).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].major, 8);
+        assert_eq!(plans[0].config.mount_path, "/data");
+    }
+
+    #[test]
+    fn annotation_rejects_missing_linux_block_device() {
+        let err = annotated_block_device_plans(&annotated_spec("/dev/missing")).unwrap_err();
+
+        assert!(err.to_string().contains("found 0"));
     }
 }

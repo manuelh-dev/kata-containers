@@ -181,7 +181,7 @@ impl Container {
         // handler volumes
         let volumes = self
             .resource_manager
-            .handler_volumes(&config.container_id, &spec)
+            .handler_volumes(&config.container_id, &mut spec)
             .await
             .context("handler volumes")?;
         let mut oci_mounts = vec![];

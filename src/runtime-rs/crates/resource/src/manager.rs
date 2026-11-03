@@ -193,7 +193,7 @@ impl ResourceManager {
     pub async fn handler_volumes(
         &self,
         cid: &str,
-        spec: &oci::Spec,
+        spec: &mut oci::Spec,
     ) -> Result<Vec<Arc<dyn Volume>>> {
         let inner = self.inner.read().await;
         inner.handler_volumes(cid, spec).await

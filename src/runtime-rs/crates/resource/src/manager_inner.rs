@@ -511,7 +511,7 @@ impl ResourceManagerInner {
     pub async fn handler_volumes(
         &self,
         cid: &str,
-        spec: &oci::Spec,
+        spec: &mut oci::Spec,
     ) -> Result<Vec<Arc<dyn Volume>>> {
         let capabilities = self.hypervisor.capabilities().await?;
         let ctx = crate::volume::VolumeContext {
@@ -1390,7 +1390,7 @@ async fn resolve_physical_endpoint_pci_paths(
 /// write ("w") bit. Wildcard rules (no major/minor) describe broad device
 /// classes and are ignored so they cannot override a specific device's access.
 /// If no exact rule matches, the device is left read-write.
-fn device_cgroup_access_is_readonly(
+pub(crate) fn device_cgroup_access_is_readonly(
     linux: &Linux,
     dev_type: LinuxDeviceType,
     major: i64,
@@ -1435,7 +1435,7 @@ fn device_cgroup_access_is_readonly(
 /// carry no read-only signal in the OCI spec, so the device flag is the only
 /// reliable source. Any failure is logged and treated as not-read-only so it
 /// can never flip a positive signal back.
-fn block_device_node_is_readonly(major: i64, minor: i64) -> bool {
+pub(crate) fn block_device_node_is_readonly(major: i64, minor: i64) -> bool {
     let host_path = match get_host_path(DEVICE_TYPE_BLOCK, major, minor) {
         Ok(path) if !path.is_empty() => path,
         Ok(_) => return false,

@@ -22,6 +22,9 @@ use self::cri_containerd::{SANDBOX_CPU_PERIOD_KEY, SANDBOX_CPU_QUOTA_KEY, SANDBO
 /// CRI-containerd specific annotations.
 pub mod cri_containerd;
 
+/// Experimental block-device mount annotation.
+pub mod block_device_mount;
+
 /// CRI-O specific annotations.
 pub mod crio;
 
