@@ -1,0 +1,47 @@
+# Copyright (c) 2026 NVIDIA Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: annotated-block-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: annotated-block-pv
+spec:
+  capacity:
+    storage: 128Mi
+  volumeMode: Block
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: annotated-block-local
+  local:
+    path: ${LOCAL_DEVICE}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - ${NODE_NAME}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: annotated-block-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 128Mi
+  volumeMode: Block
+  storageClassName: annotated-block-local
