@@ -1,2 +1,7 @@
 deploy/webhook-certs.yaml
 deploy/webhook-registration.yaml
+artifacts/*
+!artifacts/identity-and-volumes/
+!artifacts/identity-and-volumes/**
+!artifacts/nvidia-gpu-snp/
+!artifacts/nvidia-gpu-snp/**

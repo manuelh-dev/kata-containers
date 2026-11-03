@@ -95,26 +95,43 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 		return &kwhmutating.MutatorResult{}, nil
 	}
 
-	if pod.Spec.RuntimeClassName != nil {
-		fmt.Println("explicit runtime: ", pod.GetNamespace(), pod.GetName(), pod.Spec.RuntimeClassName)
-		return &kwhmutating.MutatorResult{}, nil
-	}
-
-	minMemoryLimit, err := getMinMemoryLimit(minMemoryLimitEnvKey)
-	if err != nil {
-		return nil, err
-	}
-	if minMemoryLimit != nil {
-		enforceMinMemoryLimit(pod.Spec.Containers, *minMemoryLimit)
-		enforceMinMemoryLimit(pod.Spec.InitContainers, *minMemoryLimit)
-	}
-
-	// Mutate the pod
-	fmt.Println("setting runtime to kata: ", pod.GetNamespace(), pod.GetName())
-
+	mutated := false
 	runtimeClassEnvKey := "RUNTIME_CLASS"
 	kataRuntimeClassName := getRuntimeClass(runtimeClassEnvKey, "kata")
-	pod.Spec.RuntimeClassName = &kataRuntimeClassName
+	if pod.Spec.RuntimeClassName != nil {
+		fmt.Println("explicit runtime: ", pod.GetNamespace(), pod.GetName(), pod.Spec.RuntimeClassName)
+	} else {
+		minMemoryLimit, err := getMinMemoryLimit(minMemoryLimitEnvKey)
+		if err != nil {
+			return nil, err
+		}
+		if minMemoryLimit != nil {
+			enforceMinMemoryLimit(pod.Spec.Containers, *minMemoryLimit)
+			enforceMinMemoryLimit(pod.Spec.InitContainers, *minMemoryLimit)
+		}
+
+		// Mutate the pod
+		fmt.Println("setting runtime to kata: ", pod.GetNamespace(), pod.GetName())
+
+		pod.Spec.RuntimeClassName = &kataRuntimeClassName
+		mutated = true
+	}
+
+	_, hasInitData := pod.Annotations[initDataAnnotation]
+	if hasInitData || *pod.Spec.RuntimeClassName == kataRuntimeClassName {
+		initDataMutated, err := injectPodSpecIntoInitData(pod)
+		if err != nil {
+			return nil, fmt.Errorf("inject PodSpec into init-data: %w", err)
+		}
+		if initDataMutated {
+			fmt.Println("added PodSpec to init-data: ", pod.GetNamespace(), pod.GetName())
+			mutated = true
+		}
+	}
+
+	if !mutated {
+		return &kwhmutating.MutatorResult{}, nil
+	}
 
 	return &kwhmutating.MutatorResult{
 		MutatedObject: pod,
