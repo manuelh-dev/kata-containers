@@ -127,6 +127,81 @@ stable identities and logical paths, but it runs before scheduling and before
 the backing driver's `NodePublishVolume`; it cannot know the eventual
 node-local host device path.
 
+## Planned first use
+
+The first end-to-end test does not require an external backing CSI driver. It
+uses the same static local-block pattern as the Kubernetes trusted-storage
+tests: a host file is attached to a loop device and exposed through a
+node-affine local PV.
+
+Run the following commands on the selected Kubernetes node:
+
+```bash
+sudo truncate -s 1G /tmp/kata-crd-volume.img
+loop_device=$(sudo losetup --find --show /tmp/kata-crd-volume.img)
+sudo mkfs.ext4 -F "${loop_device}"
+echo "${loop_device}"
+```
+
+Substitute the resulting loop-device path and the node name in this backing
+storage manifest:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kata-crd-backing-pv
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Block
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /dev/loopN
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-node-name
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: created-disk
+spec:
+  accessModes:
+  - ReadWriteOnce
+  volumeMode: Block
+  storageClassName: local-storage
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+After creating this backing PVC, apply the `KataVolume`, Kata-facing PVC, and
+Pod shown above. The Pod should see the existing ext4 filesystem at `/data`.
+Writing a marker, deleting the Pod, and creating it again must preserve the
+marker.
+
+This setup exercises the CRD controller, admission mutation, local block
+publication, OCI device correlation, and DAV guest mount without introducing
+backend-specific behavior. Longhorn and NVMesh Block PVCs are subsequent test
+cases. Cleanup must delete the Pod, PVCs, and PV before detaching the loop
+device and removing its backing file.
+
 ## Planned source layout
 
 The intended directory structure is:
