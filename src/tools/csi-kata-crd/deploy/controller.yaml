@@ -1,0 +1,28 @@
+#
+# Copyright (c) 2026 Kata Containers contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: csi-kata-crd-controller
+  namespace: kata-crd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csi-kata-crd-controller
+  template:
+    metadata:
+      labels:
+        app: csi-kata-crd-controller
+    spec:
+      serviceAccountName: csi-kata-crd
+      containers:
+      - name: controller
+        image: localhost/csi-kata-crd:prototype
+        imagePullPolicy: IfNotPresent
+        command:
+        - /csi-kata-crd-controller

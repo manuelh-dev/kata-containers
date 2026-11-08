@@ -14,6 +14,7 @@ pub mod spdk_volume;
 pub mod vfio_volume;
 
 pub const KATA_DIRECT_VOLUME_TYPE: &str = "directvol";
+pub const KATA_OCI_BLOCK_VOLUME_TYPE: &str = "oci-block";
 pub const KATA_VFIO_VOLUME_TYPE: &str = "vfiovol";
 pub const KATA_SPDK_VOLUME_TYPE: &str = "spdkvol";
 pub const KATA_SPOOL_VOLUME_TYPE: &str = "spoolvol";

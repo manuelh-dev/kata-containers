@@ -1,0 +1,83 @@
+#
+# Copyright (c) 2026 Kata Containers contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: crdvolume.csi.katacontainers.io
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  fsGroupPolicy: None
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-kata-crd-node
+  namespace: kata-crd
+spec:
+  selector:
+    matchLabels:
+      app: csi-kata-crd-node
+  template:
+    metadata:
+      labels:
+        app: csi-kata-crd-node
+    spec:
+      serviceAccountName: csi-kata-crd
+      containers:
+      - name: node
+        image: localhost/csi-kata-crd:prototype
+        imagePullPolicy: IfNotPresent
+        command:
+        - /csi-kata-crd-node
+        args:
+        - --endpoint=unix:///csi/csi.sock
+        - --node-id=$(NODE_NAME)
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: socket
+          mountPath: /csi
+        - name: kubelet-pods
+          mountPath: /var/lib/kubelet/pods
+          mountPropagation: Bidirectional
+        - name: direct-volumes
+          mountPath: /run/kata-containers/shared/direct-volumes
+      - name: node-driver-registrar
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0
+        args:
+        - --csi-address=/csi/csi.sock
+        - --kubelet-registration-path=/var/lib/kubelet/plugins/crdvolume.csi.katacontainers.io/csi.sock
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: socket
+          mountPath: /csi
+        - name: registration
+          mountPath: /registration
+      volumes:
+      - name: socket
+        hostPath:
+          path: /var/lib/kubelet/plugins/crdvolume.csi.katacontainers.io
+          type: DirectoryOrCreate
+      - name: registration
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: Directory
+      - name: kubelet-pods
+        hostPath:
+          path: /var/lib/kubelet/pods
+          type: Directory
+      - name: direct-volumes
+        hostPath:
+          path: /run/kata-containers/shared/direct-volumes
+          type: DirectoryOrCreate

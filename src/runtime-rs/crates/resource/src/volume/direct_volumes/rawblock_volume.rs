@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use hypervisor::{
     device::{
         device_manager::{do_handle_device, get_block_device_info, DeviceManager},
+        util::{get_host_path, DEVICE_TYPE_BLOCK},
         DeviceConfig,
     },
     BlockConfigModern, BlockDeviceAio,
@@ -19,7 +20,7 @@ use oci_spec::runtime as oci;
 use tokio::sync::RwLock;
 
 use crate::volume::{
-    direct_volumes::KATA_DIRECT_VOLUME_TYPE,
+    direct_volumes::{KATA_DIRECT_VOLUME_TYPE, KATA_OCI_BLOCK_VOLUME_TYPE},
     utils::{handle_block_volume, is_block_device_readonly},
     Volume,
 };
@@ -90,8 +91,60 @@ impl RawblockVolume {
             ..Default::default()
         };
 
+        Self::new_with_config(d, m, mount_info, read_only, sid, block_config).await
+    }
+
+    pub(crate) async fn new_from_oci_device(
+        d: &RwLock<DeviceManager>,
+        m: &oci::Mount,
+        mount_info: &DirectVolumeMountInfo,
+        device: &oci::LinuxDevice,
+        read_only: bool,
+        sid: &str,
+    ) -> Result<Self> {
+        if mount_info.volume_type != KATA_OCI_BLOCK_VOLUME_TYPE {
+            return Err(anyhow!(
+                "volume type {:?} is invalid",
+                mount_info.volume_type
+            ));
+        }
+        if device.typ() != oci::LinuxDeviceType::B {
+            return Err(anyhow!(
+                "OCI device {:?} is not a block device",
+                device.path()
+            ));
+        }
+
+        let blkdev_info = get_block_device_info(d).await;
+        let path_on_host = get_host_path(DEVICE_TYPE_BLOCK, device.major(), device.minor())
+            .context("get host path for OCI block device")?;
+        let block_config = BlockConfigModern {
+            path_on_host,
+            major: device.major(),
+            minor: device.minor(),
+            is_readonly: read_only,
+            driver_option: blkdev_info.block_device_driver,
+            blkdev_aio: BlockDeviceAio::new(&blkdev_info.block_device_aio),
+            num_queues: blkdev_info.num_queues,
+            queue_size: blkdev_info.queue_size,
+            logical_sector_size: blkdev_info.block_device_logical_sector_size,
+            physical_sector_size: blkdev_info.block_device_physical_sector_size,
+            ..Default::default()
+        };
+
+        Self::new_with_config(d, m, mount_info, read_only, sid, block_config).await
+    }
+
+    async fn new_with_config(
+        d: &RwLock<DeviceManager>,
+        m: &oci::Mount,
+        mount_info: &DirectVolumeMountInfo,
+        read_only: bool,
+        sid: &str,
+        block_config: BlockConfigModern,
+    ) -> Result<Self> {
         // create and insert block device into Kata VM
-        let device_info = do_handle_device(d, &DeviceConfig::BlockCfgModern(block_config.clone()))
+        let device_info = do_handle_device(d, &DeviceConfig::BlockCfgModern(block_config))
             .await
             .context("do handle device failed.")?;
 

@@ -1,0 +1,52 @@
+#
+# Copyright (c) 2026 Kata Containers contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: csi-kata-crd-webhook
+  namespace: kata-crd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csi-kata-crd-webhook
+  template:
+    metadata:
+      labels:
+        app: csi-kata-crd-webhook
+    spec:
+      serviceAccountName: csi-kata-crd
+      containers:
+      - name: webhook
+        image: localhost/csi-kata-crd:prototype
+        imagePullPolicy: IfNotPresent
+        command:
+        - /csi-kata-crd-webhook
+        ports:
+        - name: https
+          containerPort: 8443
+        volumeMounts:
+        - name: tls
+          mountPath: /tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: csi-kata-crd-webhook-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: csi-kata-crd-webhook
+  namespace: kata-crd
+spec:
+  selector:
+    app: csi-kata-crd-webhook
+  ports:
+  - name: https
+    port: 443
+    targetPort: https

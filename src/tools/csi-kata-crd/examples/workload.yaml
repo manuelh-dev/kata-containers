@@ -1,0 +1,59 @@
+#
+# Copyright (c) 2026 Kata Containers contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+apiVersion: storage.katacontainers.io/v1alpha1
+kind: KataVolume
+metadata:
+  name: created-kv
+spec:
+  backingClaim: created-disk
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: created
+spec:
+  accessModes:
+  - ReadWriteOnce
+  volumeMode: Filesystem
+  storageClassName: kata-crd-ext4
+  dataSourceRef:
+    apiGroup: storage.katacontainers.io
+    kind: KataVolume
+    name: created-kv
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kata-crd-volume-test
+spec:
+  runtimeClassName: kata-qemu-nvidia-gpu-runtime-rs
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: quay.io/prometheus/busybox:latest
+    command:
+    - sh
+    - -c
+    - |
+      set -eu
+      grep ' /data ' /proc/mounts
+      if [ -f /data/marker ]; then
+          cat /data/marker
+      else
+          echo persistent-data > /data/marker
+      fi
+      sleep infinity
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: created

@@ -156,9 +156,15 @@ impl VolumeResource {
                 )
             } else if is_direct_volume(m)? {
                 // handle direct volumes
-                match direct_volume::handle_direct_volume(d, m, read_only, sid)
-                    .await
-                    .context("handle direct volume")?
+                match direct_volume::handle_direct_volume(
+                    d,
+                    m,
+                    read_only,
+                    sid,
+                    spec.linux().as_ref(),
+                )
+                .await
+                .context("handle direct volume")?
                 {
                     Some(directvol) => directvol,
                     None => continue,
