@@ -1,0 +1,230 @@
+---
+cdiVersion: 0.5.0
+kind: nvidia.com/gpu
+devices:
+    - name: "0"
+      containerEdits:
+        deviceNodes:
+            - path: /dev/nvidia0
+              major: 195
+              fileMode: 432
+              permissions: rwm
+    - name: GPU-e5bcc355-fa37-6030-d83e-e8f5ac02e529
+      containerEdits:
+        deviceNodes:
+            - path: /dev/nvidia0
+              major: 195
+              fileMode: 432
+              permissions: rwm
+    - name: all
+      containerEdits:
+        deviceNodes:
+            - path: /dev/nvidia0
+              major: 195
+              fileMode: 432
+              permissions: rwm
+containerEdits:
+    env:
+        - NVIDIA_CTK_LIBCUDA_DIR=/usr/lib/x86_64-linux-gnu
+        - NVIDIA_VISIBLE_DEVICES=void
+    deviceNodes:
+        - path: /dev/nvidia-uvm
+          major: 239
+          fileMode: 438
+          permissions: rwm
+        - path: /dev/nvidiactl
+          major: 195
+          minor: 255
+          fileMode: 432
+          permissions: rwm
+    hooks:
+        - hookName: createContainer
+          path: /run/kata-extensions/gpu/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - create-symlinks
+            - --link
+            - libcuda.so.1::/usr/lib/x86_64-linux-gnu/libcuda.so
+            - --link
+            - libcuda.so.615.71.09::/usr/lib/x86_64-linux-gnu/libcuda.so.1
+            - --link
+            - libnvcuvid.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvcuvid.so.1
+            - --link
+            - libnvidia-cfg.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.1
+            - --link
+            - libnvidia-encode.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-encode.so.1
+            - --link
+            - libnvidia-ml.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+            - --link
+            - libnvidia-nscq.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2
+            - --link
+            - libnvidia-nvvm.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.4
+            - --link
+            - libnvidia-opencl.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-opencl.so.1
+            - --link
+            - libnvidia-ptxjitcompiler.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1
+            - --link
+            - libnvidia-sandboxutils.so.615.71.09::/usr/lib/x86_64-linux-gnu/libnvidia-sandboxutils.so.1
+          env:
+            - NVIDIA_CTK_DEBUG=false
+        - hookName: createContainer
+          path: /run/kata-extensions/gpu/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - enable-cuda-compat
+            - --host-driver-version=615.71.09
+          env:
+            - NVIDIA_CTK_DEBUG=false
+        - hookName: createContainer
+          path: /run/kata-extensions/gpu/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - update-ldcache
+            - --folder
+            - /usr/lib/x86_64-linux-gnu
+          env:
+            - NVIDIA_CTK_DEBUG=false
+        - hookName: createContainer
+          path: /run/kata-extensions/gpu/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - disable-device-node-modification
+          env:
+            - NVIDIA_CTK_DEBUG=false
+    mounts:
+        - hostPath: /run/kata-extensions/gpu/bin/nvidia-persistenced
+          containerPath: /bin/nvidia-persistenced
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/bin/nvidia-smi
+          containerPath: /bin/nvidia-smi
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libcuda.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libcuda.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvcuvid.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvcuvid.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-encode.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-encode.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-opencl.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-opencl.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-sandboxutils.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-sandboxutils.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/usr/lib/x86_64-linux-gnu/libnvidia-tileiras.so.615.71.09
+          containerPath: /usr/lib/x86_64-linux-gnu/libnvidia-tileiras.so.615.71.09
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/lib/firmware/nvidia/615.71.09/gsp_ga10x.bin
+          containerPath: /lib/firmware/nvidia/615.71.09/gsp_ga10x.bin
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
+        - hostPath: /run/kata-extensions/gpu/lib/firmware/nvidia/615.71.09/gsp_tu10x.bin
+          containerPath: /lib/firmware/nvidia/615.71.09/gsp_tu10x.bin
+          options:
+            - ro
+            - nosuid
+            - nodev
+            - rbind
+            - rprivate
