@@ -41,7 +41,7 @@ func TestInjectPodSpecIntoInitData(t *testing.T) {
 		},
 	}
 
-	changed, err := injectIntoInitData(pod, nil)
+	changed, err := injectIntoInitData(pod, "default", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestInjectPodSpecIntoInitData(t *testing.T) {
 	}
 
 	encoded := pod.Annotations[initDataAnnotation]
-	changed, err = injectIntoInitData(pod, nil)
+	changed, err = injectIntoInitData(pod, "default", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestInjectPodSpecIntoInitDataCreatesAnnotation(t *testing.T) {
 		},
 	}
 
-	changed, err := injectIntoInitData(pod, nil)
+	changed, err := injectIntoInitData(pod, "default", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +116,71 @@ func TestInjectPodSpecIntoInitDataCreatesAnnotation(t *testing.T) {
 	}
 	if data.Data[podSpecDataKey] != string(expected) {
 		t.Fatalf("unexpected PodSpec:\ngot:  %s\nwant: %s", data.Data[podSpecDataKey], expected)
+	}
+}
+
+func TestInjectPodMetadataIntoInitData(t *testing.T) {
+	tests := []struct {
+		name         string
+		podName      string
+		generateName string
+		want         string
+	}{
+		{
+			name:    "named Pod",
+			podName: "workload",
+			want:    `{"name":"workload","generateName":"","namespace":"request-namespace"}`,
+		},
+		{
+			name:         "generated name",
+			generateName: "workload-",
+			want:         `{"name":"","generateName":"workload-","namespace":"request-namespace"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:         tt.podName,
+					GenerateName: tt.generateName,
+					Namespace:    "object-namespace",
+					Labels:       map[string]string{"app": "workload"},
+					Annotations: map[string]string{
+						"kubectl.kubernetes.io/last-applied-configuration": `{"kind":"Pod"}`,
+					},
+					ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl", Operation: metav1.ManagedFieldsOperationUpdate}},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "workload", Image: "example.com/workload:latest"}},
+				},
+			}
+
+			changed, err := injectIntoInitData(pod, "request-namespace", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !changed {
+				t.Fatal("expected init-data to change")
+			}
+
+			data, err := decodeInitData(pod.Annotations[initDataAnnotation])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := data.Data[podMetadataDataKey]; got != tt.want {
+				t.Fatalf("unexpected Pod metadata:\ngot:  %s\nwant: %s", got, tt.want)
+			}
+
+			encoded := pod.Annotations[initDataAnnotation]
+			changed, err = injectIntoInitData(pod, "request-namespace", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed || pod.Annotations[initDataAnnotation] != encoded {
+				t.Fatal("expected a second injection to be idempotent")
+			}
+		})
 	}
 }
 
@@ -167,7 +232,7 @@ func TestInjectAgentPolicyIntoInitData(t *testing.T) {
 			}
 
 			entries := []initDataEntry{{key: policyDataKey, mode: tt.mode, content: staticPolicy}}
-			_, err = injectIntoInitData(pod, entries)
+			_, err = injectIntoInitData(pod, "default", entries)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("expected error: %v, got: %v", tt.wantErr, err)
 			}
@@ -192,7 +257,7 @@ func TestInjectAgentPolicyIntoInitData(t *testing.T) {
 			}
 
 			encoded := pod.Annotations[initDataAnnotation]
-			changed, err := injectIntoInitData(pod, entries)
+			changed, err := injectIntoInitData(pod, "default", entries)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -246,7 +311,7 @@ func TestInjectIntoMalformedInitData(t *testing.T) {
 		},
 	}
 
-	if _, err := injectIntoInitData(pod, testPolicyEntries); err == nil {
+	if _, err := injectIntoInitData(pod, "default", testPolicyEntries); err == nil {
 		t.Fatal("expected malformed init-data to fail")
 	}
 }

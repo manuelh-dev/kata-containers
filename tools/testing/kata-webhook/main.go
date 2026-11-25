@@ -118,7 +118,7 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 	}
 
 	if whPolicy.initDataRuntimeClasses[*pod.Spec.RuntimeClassName] {
-		initDataMutated, err := injectIntoInitData(pod, whPolicy.initDataEntries)
+		initDataMutated, err := injectIntoInitData(pod, ar.Namespace, whPolicy.initDataEntries)
 		if err != nil {
 			return nil, fmt.Errorf("inject into init-data: %w", err)
 		}

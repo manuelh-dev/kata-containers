@@ -21,6 +21,7 @@ import (
 const (
 	initDataAnnotation = "io.katacontainers.config.hypervisor.cc_init_data"
 	podSpecDataKey     = "pod-spec.json"
+	podMetadataDataKey = "pod-metadata.json"
 	policyDataKey      = "policy.rego"
 	initDataVersion    = "0.1.0"
 	initDataAlgorithm  = "sha256"
@@ -103,6 +104,16 @@ func (e initDataEntry) apply(data map[string]string) (bool, error) {
 	return setDataEntry(data, e.key, e.content), nil
 }
 
+// podMetadata is the part of the Pod's ObjectMeta that the guest needs next to
+// the PodSpec. Other ObjectMeta fields are either not yet assigned at admission
+// time, such as uid, or volatile, such as managedFields and
+// kubectl.kubernetes.io/last-applied-configuration.
+type podMetadata struct {
+	Name         string `json:"name"`
+	GenerateName string `json:"generateName"`
+	Namespace    string `json:"namespace"`
+}
+
 type initData struct {
 	Version   string            `toml:"version"`
 	Algorithm string            `toml:"algorithm"`
@@ -163,14 +174,24 @@ func setDataEntry(data map[string]string, key, value string) bool {
 	return true
 }
 
-// injectIntoInitData adds the admission-time Kubernetes PodSpec to Kata
-// init-data, creating the init-data annotation if needed, and applies entries,
-// such as policy.rego, according to their modes. Without a policy.rego entry,
-// the agent keeps using its image-bundled default policy.
-func injectIntoInitData(pod *corev1.Pod, entries []initDataEntry) (bool, error) {
+// injectIntoInitData adds the admission-time Kubernetes PodSpec and the Pod's
+// name, generateName, and namespace to Kata init-data, creating the init-data
+// annotation if needed, and applies entries, such as policy.rego, according to
+// their modes. Without a policy.rego entry, the agent keeps using its
+// image-bundled default policy. namespace must come from the admission
+// request, because the Pod object does not always carry it.
+func injectIntoInitData(pod *corev1.Pod, namespace string, entries []initDataEntry) (bool, error) {
 	podSpec, err := json.Marshal(pod.Spec)
 	if err != nil {
 		return false, fmt.Errorf("serialize PodSpec: %w", err)
+	}
+	metadata, err := json.Marshal(podMetadata{
+		Name:         pod.Name,
+		GenerateName: pod.GenerateName,
+		Namespace:    namespace,
+	})
+	if err != nil {
+		return false, fmt.Errorf("serialize Pod metadata: %w", err)
 	}
 
 	data := &initData{
@@ -195,6 +216,7 @@ func injectIntoInitData(pod *corev1.Pod, entries []initDataEntry) (bool, error) 
 		changed = entryChanged || changed
 	}
 	changed = setDataEntry(data.Data, podSpecDataKey, string(podSpec)) || changed
+	changed = setDataEntry(data.Data, podMetadataDataKey, string(metadata)) || changed
 	if !changed {
 		return false, nil
 	}
