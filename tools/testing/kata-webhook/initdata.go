@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	initDataAnnotation = "io.katacontainers.config.hypervisor.cc_init_data"
-	podSpecDataKey     = "pod-spec.json"
-	podMetadataDataKey = "pod-metadata.json"
-	policyDataKey      = "policy.rego"
-	ociSettingsDataKey = "oci-settings.json"
-	initDataVersion    = "0.1.0"
-	initDataAlgorithm  = "sha256"
+	initDataAnnotation     = "io.katacontainers.config.hypervisor.cc_init_data"
+	podSpecDataKey         = "pod-spec.json"
+	podMetadataDataKey     = "pod-metadata.json"
+	policyDataKey          = "policy.rego"
+	ociSettingsDataKey     = "oci-settings.json"
+	clusterSettingsDataKey = "cluster-settings.json"
+	initDataVersion        = "0.1.0"
+	initDataAlgorithm      = "sha256"
 )
 
 // injectionMode controls how the webhook handles an init-data entry that it

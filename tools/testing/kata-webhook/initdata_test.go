@@ -270,7 +270,8 @@ func TestInjectAgentPolicyIntoInitData(t *testing.T) {
 
 func TestInjectSettingsIntoInitData(t *testing.T) {
 	const (
-		ociSettings = `{"1.2.0":{"namespaces":["ipc","uts","mount"]}}`
+		ociSettings     = `{"1.2.0":{"namespaces":["ipc","uts","mount"]}}`
+		clusterSettings = `{"services":[{"name":"kubernetes","clusterIP":"10.96.0.1"}]}`
 	)
 
 	annotation, err := encodeInitData(&initData{
@@ -292,6 +293,7 @@ func TestInjectSettingsIntoInitData(t *testing.T) {
 	entries := []initDataEntry{
 		{key: policyDataKey, mode: injectionPreserve},
 		{key: ociSettingsDataKey, mode: injectionReplace, content: ociSettings},
+		{key: clusterSettingsDataKey, mode: injectionReplace, content: clusterSettings},
 	}
 
 	changed, err := injectIntoInitData(pod, "default", entries)
@@ -308,6 +310,9 @@ func TestInjectSettingsIntoInitData(t *testing.T) {
 	}
 	if got := data.Data[ociSettingsDataKey]; got != ociSettings {
 		t.Fatalf("unexpected OCI settings:\ngot:  %s\nwant: %s", got, ociSettings)
+	}
+	if got := data.Data[clusterSettingsDataKey]; got != clusterSettings {
+		t.Fatalf("unexpected cluster settings:\ngot:  %s\nwant: %s", got, clusterSettings)
 	}
 	if _, ok := data.Data[policyDataKey]; ok {
 		t.Fatal("preserve mode unexpectedly added a policy")
@@ -352,6 +357,7 @@ func TestLoadInitDataEntry(t *testing.T) {
 		{name: "valid JSON", key: ociSettingsDataKey, mode: "replace", file: settingsFile},
 		{name: "invalid JSON", key: ociSettingsDataKey, mode: "replace", file: invalidSettingsFile, wantErr: true},
 		{name: "JSON check only for JSON entries", key: policyDataKey, mode: "replace", file: invalidSettingsFile},
+		{name: "invalid cluster settings JSON", key: clusterSettingsDataKey, mode: "replace", file: invalidSettingsFile, wantErr: true},
 	}
 
 	for _, tt := range tests {

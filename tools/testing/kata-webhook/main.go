@@ -146,6 +146,7 @@ type config struct {
 	agentPolicyMode        string
 	agentPolicyFile        string
 	ociSettingsFile        string
+	clusterSettingsFile    string
 }
 
 type policy struct {
@@ -187,6 +188,8 @@ func initFlags() *config {
 	fl.StringVar(&cfg.agentPolicyFile, "agent-policy-file", "", "Agent policy file to inject into init-data")
 	fl.StringVar(&cfg.ociSettingsFile, "oci-settings-file", "",
 		"OCI settings JSON file whose content always replaces oci-settings.json in init-data")
+	fl.StringVar(&cfg.clusterSettingsFile, "cluster-settings-file", "",
+		"Cluster settings JSON file whose content always replaces cluster-settings.json in init-data")
 
 	fl.Parse(os.Args[1:])
 	return cfg
@@ -234,6 +237,7 @@ func main() {
 	// replaces the entry, because only the webhook may provide it.
 	for _, source := range []struct{ key, file string }{
 		{ociSettingsDataKey, cfg.ociSettingsFile},
+		{clusterSettingsDataKey, cfg.clusterSettingsFile},
 	} {
 		if source.file == "" {
 			continue
