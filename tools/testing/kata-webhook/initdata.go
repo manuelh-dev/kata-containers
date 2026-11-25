@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 const (
 	initDataAnnotation = "io.katacontainers.config.hypervisor.cc_init_data"
+	podSpecDataKey     = "pod-spec.json"
 	policyDataKey      = "policy.rego"
 	initDataVersion    = "0.1.0"
 	initDataAlgorithm  = "sha256"
@@ -161,11 +163,16 @@ func setDataEntry(data map[string]string, key, value string) bool {
 	return true
 }
 
-// injectIntoInitData applies entries, such as policy.rego, to the Pod's Kata
-// init-data according to their modes, creating the init-data annotation if
-// needed. Without a policy.rego entry, the agent keeps using its image-bundled
-// default policy.
+// injectIntoInitData adds the admission-time Kubernetes PodSpec to Kata
+// init-data, creating the init-data annotation if needed, and applies entries,
+// such as policy.rego, according to their modes. Without a policy.rego entry,
+// the agent keeps using its image-bundled default policy.
 func injectIntoInitData(pod *corev1.Pod, entries []initDataEntry) (bool, error) {
+	podSpec, err := json.Marshal(pod.Spec)
+	if err != nil {
+		return false, fmt.Errorf("serialize PodSpec: %w", err)
+	}
+
 	data := &initData{
 		Version:   initDataVersion,
 		Algorithm: initDataAlgorithm,
@@ -187,6 +194,7 @@ func injectIntoInitData(pod *corev1.Pod, entries []initDataEntry) (bool, error) 
 		}
 		changed = entryChanged || changed
 	}
+	changed = setDataEntry(data.Data, podSpecDataKey, string(podSpec)) || changed
 	if !changed {
 		return false, nil
 	}
