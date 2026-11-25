@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -23,6 +24,7 @@ const (
 	podSpecDataKey     = "pod-spec.json"
 	podMetadataDataKey = "pod-metadata.json"
 	policyDataKey      = "policy.rego"
+	ociSettingsDataKey = "oci-settings.json"
 	initDataVersion    = "0.1.0"
 	initDataAlgorithm  = "sha256"
 )
@@ -77,6 +79,9 @@ func loadInitDataEntry(key, modeValue, file string) (initDataEntry, error) {
 	}
 	if len(bytes.TrimSpace(content)) == 0 {
 		return initDataEntry{}, fmt.Errorf("%s: file %s is empty", key, file)
+	}
+	if strings.HasSuffix(key, ".json") && !json.Valid(content) {
+		return initDataEntry{}, fmt.Errorf("%s: file %s is not valid JSON", key, file)
 	}
 
 	return initDataEntry{key: key, mode: mode, content: string(content)}, nil

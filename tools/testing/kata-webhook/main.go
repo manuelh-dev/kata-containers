@@ -145,6 +145,7 @@ type config struct {
 	initDataRuntimeClasses string
 	agentPolicyMode        string
 	agentPolicyFile        string
+	ociSettingsFile        string
 }
 
 type policy struct {
@@ -184,6 +185,8 @@ func initFlags() *config {
 	fl.StringVar(&cfg.agentPolicyMode, "agent-policy-mode", string(injectionPreserve),
 		"How to handle policy.rego in init-data: preserve, set-if-absent, replace or fail-if-present")
 	fl.StringVar(&cfg.agentPolicyFile, "agent-policy-file", "", "Agent policy file to inject into init-data")
+	fl.StringVar(&cfg.ociSettingsFile, "oci-settings-file", "",
+		"OCI settings JSON file whose content always replaces oci-settings.json in init-data")
 
 	fl.Parse(os.Args[1:])
 	return cfg
@@ -226,6 +229,22 @@ func main() {
 		os.Exit(1)
 	}
 	whPolicy.initDataEntries = append(whPolicy.initDataEntries, policyEntry)
+
+	// Settings have no mode: when a file is given, its content always
+	// replaces the entry, because only the webhook may provide it.
+	for _, source := range []struct{ key, file string }{
+		{ociSettingsDataKey, cfg.ociSettingsFile},
+	} {
+		if source.file == "" {
+			continue
+		}
+		entry, err := loadInitDataEntry(source.key, string(injectionReplace), source.file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading init-data entry: %s", err)
+			os.Exit(1)
+		}
+		whPolicy.initDataEntries = append(whPolicy.initDataEntries, entry)
+	}
 
 	// Create our mutator
 	mt := kwhmutating.MutatorFunc(annotatePodMutator)

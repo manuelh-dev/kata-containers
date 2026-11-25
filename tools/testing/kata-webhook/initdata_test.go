@@ -268,6 +268,61 @@ func TestInjectAgentPolicyIntoInitData(t *testing.T) {
 	}
 }
 
+func TestInjectSettingsIntoInitData(t *testing.T) {
+	const (
+		ociSettings = `{"1.2.0":{"namespaces":["ipc","uts","mount"]}}`
+	)
+
+	annotation, err := encodeInitData(&initData{
+		Version:   initDataVersion,
+		Algorithm: initDataAlgorithm,
+		Data:      map[string]string{ociSettingsDataKey: `{"provided":"by the Pod"}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{initDataAnnotation: annotation},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workload", Image: "example.com/workload:latest"}},
+		},
+	}
+	entries := []initDataEntry{
+		{key: policyDataKey, mode: injectionPreserve},
+		{key: ociSettingsDataKey, mode: injectionReplace, content: ociSettings},
+	}
+
+	changed, err := injectIntoInitData(pod, "default", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected init-data to change")
+	}
+
+	data, err := decodeInitData(pod.Annotations[initDataAnnotation])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := data.Data[ociSettingsDataKey]; got != ociSettings {
+		t.Fatalf("unexpected OCI settings:\ngot:  %s\nwant: %s", got, ociSettings)
+	}
+	if _, ok := data.Data[policyDataKey]; ok {
+		t.Fatal("preserve mode unexpectedly added a policy")
+	}
+
+	encoded := pod.Annotations[initDataAnnotation]
+	changed, err = injectIntoInitData(pod, "default", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || pod.Annotations[initDataAnnotation] != encoded {
+		t.Fatal("expected a second injection to be idempotent")
+	}
+}
+
 func TestLoadInitDataEntry(t *testing.T) {
 	writeFile := func(name, content string) string {
 		path := filepath.Join(t.TempDir(), name)
@@ -278,6 +333,8 @@ func TestLoadInitDataEntry(t *testing.T) {
 	}
 	policyFile := writeFile("policy.rego", "package agent_policy\n")
 	emptyFile := writeFile("empty.rego", " \n")
+	settingsFile := writeFile("settings.json", `{"services":[]}`)
+	invalidSettingsFile := writeFile("invalid.json", `{"services":`)
 
 	tests := []struct {
 		name    string
@@ -292,6 +349,9 @@ func TestLoadInitDataEntry(t *testing.T) {
 		{name: "replace without file", key: policyDataKey, mode: "replace", wantErr: true},
 		{name: "missing file", key: policyDataKey, mode: "replace", file: filepath.Join(t.TempDir(), "missing.rego"), wantErr: true},
 		{name: "empty file", key: policyDataKey, mode: "fail-if-present", file: emptyFile, wantErr: true},
+		{name: "valid JSON", key: ociSettingsDataKey, mode: "replace", file: settingsFile},
+		{name: "invalid JSON", key: ociSettingsDataKey, mode: "replace", file: invalidSettingsFile, wantErr: true},
+		{name: "JSON check only for JSON entries", key: policyDataKey, mode: "replace", file: invalidSettingsFile},
 	}
 
 	for _, tt := range tests {
