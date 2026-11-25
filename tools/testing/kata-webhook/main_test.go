@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -165,6 +166,144 @@ func TestAnnotatePodMutator(t *testing.T) {
 
 			assertMemoryLimit(t, pod.Spec.Containers[0].Resources.Limits, tt.wantLimit)
 			assertMemoryLimit(t, pod.Spec.InitContainers[0].Resources.Limits, tt.wantInitLimit)
+		})
+	}
+}
+
+var testPolicyEntries = []initDataEntry{
+	{key: policyDataKey, mode: injectionReplace, content: "package agent_policy\n# static\n"},
+}
+
+func TestAnnotatePodMutatorCreatesInitDataForTargetRuntime(t *testing.T) {
+	runtimeClass := "kata-qemu-tdx"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "testing-namespace"},
+		Spec: corev1.PodSpec{
+			RuntimeClassName: &runtimeClass,
+			Containers:       []corev1.Container{{Name: "workload", Image: "example.com/workload"}},
+		},
+	}
+	whPolicy = &policy{
+		initDataRuntimeClasses: map[string]bool{"kata-qemu-snp": true, runtimeClass: true},
+		initDataEntries:        testPolicyEntries,
+	}
+
+	result, err := annotatePodMutator(
+		context.Background(),
+		&kwhmodel.AdmissionReview{Namespace: pod.Namespace},
+		pod,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MutatedObject == nil {
+		t.Fatal("expected init-data creation to mutate the pod")
+	}
+	if pod.Annotations[initDataAnnotation] == "" {
+		t.Fatal("init-data annotation was not created")
+	}
+}
+
+func TestAnnotatePodMutatorIgnoresUnlistedRuntime(t *testing.T) {
+	annotation, err := encodeInitData(&initData{
+		Version:   "0.1.0",
+		Algorithm: "sha256",
+		Data:      map[string]string{"policy.rego": "package agent_policy\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name                   string
+		runtimeClass           *string
+		annotations            map[string]string
+		initDataRuntimeClasses map[string]bool
+		wantInitData           string
+	}{
+		{
+			name:                   "unlisted explicit runtime",
+			runtimeClass:           ptr("runc"),
+			initDataRuntimeClasses: map[string]bool{"kata-qemu": true},
+		},
+		{
+			name:                   "unlisted explicit runtime with init-data",
+			runtimeClass:           ptr("runc"),
+			annotations:            map[string]string{initDataAnnotation: annotation},
+			initDataRuntimeClasses: map[string]bool{"kata-qemu": true},
+			wantInitData:           annotation,
+		},
+		{
+			name:         "default runtime without init-data RuntimeClasses",
+			runtimeClass: nil,
+		},
+		{
+			name:         "explicit runtime without init-data RuntimeClasses",
+			runtimeClass: ptr("kata-qemu"),
+			annotations:  map[string]string{initDataAnnotation: annotation},
+			wantInitData: annotation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "testing-namespace", Annotations: tt.annotations},
+				Spec: corev1.PodSpec{
+					RuntimeClassName: tt.runtimeClass,
+					Containers:       []corev1.Container{{Name: "workload", Image: "example.com/workload"}},
+				},
+			}
+			whPolicy = &policy{initDataRuntimeClasses: tt.initDataRuntimeClasses, initDataEntries: testPolicyEntries}
+
+			result, err := annotatePodMutator(
+				context.Background(),
+				&kwhmodel.AdmissionReview{Namespace: pod.Namespace},
+				pod,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.runtimeClass != nil && result.MutatedObject != nil {
+				t.Fatal("unlisted explicit runtime was mutated")
+			}
+			if got := pod.Annotations[initDataAnnotation]; got != tt.wantInitData {
+				t.Fatalf("init-data changed:\ngot:  %q\nwant: %q", got, tt.wantInitData)
+			}
+		})
+	}
+}
+
+func TestParseRuntimeClasses(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    map[string]bool
+		wantErr bool
+	}{
+		{name: "empty", value: "", want: map[string]bool{}},
+		{name: "single", value: "kata-qemu-snp", want: map[string]bool{"kata-qemu-snp": true}},
+		{
+			name:  "multiple with spaces",
+			value: "kata-qemu-snp, kata-qemu-tdx",
+			want:  map[string]bool{"kata-qemu-snp": true, "kata-qemu-tdx": true},
+		},
+		{name: "empty element", value: "kata-qemu-snp,,kata-qemu-tdx", wantErr: true},
+		{name: "trailing comma", value: "kata-qemu-snp,", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRuntimeClasses(tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("expected error: %v, got: %v", tt.wantErr, err)
+			}
+			if err != nil {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("unexpected RuntimeClasses:\ngot:  %v\nwant: %v", got, tt.want)
+			}
 		})
 	}
 }

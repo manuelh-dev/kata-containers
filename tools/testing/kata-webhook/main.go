@@ -95,26 +95,42 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 		return &kwhmutating.MutatorResult{}, nil
 	}
 
-	if pod.Spec.RuntimeClassName != nil {
-		fmt.Println("explicit runtime: ", pod.GetNamespace(), pod.GetName(), pod.Spec.RuntimeClassName)
-		return &kwhmutating.MutatorResult{}, nil
-	}
-
-	minMemoryLimit, err := getMinMemoryLimit(minMemoryLimitEnvKey)
-	if err != nil {
-		return nil, err
-	}
-	if minMemoryLimit != nil {
-		enforceMinMemoryLimit(pod.Spec.Containers, *minMemoryLimit)
-		enforceMinMemoryLimit(pod.Spec.InitContainers, *minMemoryLimit)
-	}
-
-	// Mutate the pod
-	fmt.Println("setting runtime to kata: ", pod.GetNamespace(), pod.GetName())
-
+	mutated := false
 	runtimeClassEnvKey := "RUNTIME_CLASS"
 	kataRuntimeClassName := getRuntimeClass(runtimeClassEnvKey, "kata")
-	pod.Spec.RuntimeClassName = &kataRuntimeClassName
+	if pod.Spec.RuntimeClassName != nil {
+		fmt.Println("explicit runtime: ", pod.GetNamespace(), pod.GetName(), pod.Spec.RuntimeClassName)
+	} else {
+		minMemoryLimit, err := getMinMemoryLimit(minMemoryLimitEnvKey)
+		if err != nil {
+			return nil, err
+		}
+		if minMemoryLimit != nil {
+			enforceMinMemoryLimit(pod.Spec.Containers, *minMemoryLimit)
+			enforceMinMemoryLimit(pod.Spec.InitContainers, *minMemoryLimit)
+		}
+
+		// Mutate the pod
+		fmt.Println("setting runtime to kata: ", pod.GetNamespace(), pod.GetName())
+
+		pod.Spec.RuntimeClassName = &kataRuntimeClassName
+		mutated = true
+	}
+
+	if whPolicy.initDataRuntimeClasses[*pod.Spec.RuntimeClassName] {
+		initDataMutated, err := injectIntoInitData(pod, whPolicy.initDataEntries)
+		if err != nil {
+			return nil, fmt.Errorf("inject into init-data: %w", err)
+		}
+		if initDataMutated {
+			fmt.Println("updated init-data: ", pod.GetNamespace(), pod.GetName())
+			mutated = true
+		}
+	}
+
+	if !mutated {
+		return &kwhmutating.MutatorResult{}, nil
+	}
 
 	return &kwhmutating.MutatorResult{
 		MutatedObject: pod,
@@ -122,15 +138,35 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 }
 
 type config struct {
-	certFile     string
-	keyFile      string
-	nsBlacklist  string
-	nsOnlyRegexp string
+	certFile               string
+	keyFile                string
+	nsBlacklist            string
+	nsOnlyRegexp           string
+	initDataRuntimeClasses string
+	agentPolicyMode        string
+	agentPolicyFile        string
 }
 
 type policy struct {
-	nsBlacklist  map[string]bool
-	nsOnlyRegexp *regexp.Regexp
+	nsBlacklist            map[string]bool
+	nsOnlyRegexp           *regexp.Regexp
+	initDataRuntimeClasses map[string]bool
+	initDataEntries        []initDataEntry
+}
+
+func parseRuntimeClasses(value string) (map[string]bool, error) {
+	runtimeClasses := make(map[string]bool)
+	if value == "" {
+		return runtimeClasses, nil
+	}
+	for _, runtimeClass := range strings.Split(value, ",") {
+		runtimeClass = strings.TrimSpace(runtimeClass)
+		if runtimeClass == "" {
+			return nil, fmt.Errorf("empty RuntimeClass name in %q", value)
+		}
+		runtimeClasses[runtimeClass] = true
+	}
+	return runtimeClasses, nil
 }
 
 var whPolicy *policy
@@ -143,6 +179,11 @@ func initFlags() *config {
 	fl.StringVar(&cfg.keyFile, "tls-key-file", "", "TLS key file")
 	fl.StringVar(&cfg.nsBlacklist, "exclude-namespaces", "", "Comma separated namespace blacklist")
 	fl.StringVar(&cfg.nsOnlyRegexp, "only-namespaces-regexp", "", "Regexp namespace filter applied after --exclude-namespaces")
+	fl.StringVar(&cfg.initDataRuntimeClasses, "initdata-runtime-classes", "",
+		"Comma separated RuntimeClass names whose Pods receive init-data injection")
+	fl.StringVar(&cfg.agentPolicyMode, "agent-policy-mode", string(injectionPreserve),
+		"How to handle policy.rego in init-data: preserve, set-if-absent, replace or fail-if-present")
+	fl.StringVar(&cfg.agentPolicyFile, "agent-policy-file", "", "Agent policy file to inject into init-data")
 
 	fl.Parse(os.Args[1:])
 	return cfg
@@ -171,6 +212,20 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	initDataRuntimeClasses, err := parseRuntimeClasses(cfg.initDataRuntimeClasses)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error parsing init-data RuntimeClasses: %s", err)
+		os.Exit(1)
+	}
+	whPolicy.initDataRuntimeClasses = initDataRuntimeClasses
+
+	policyEntry, err := loadInitDataEntry(policyDataKey, cfg.agentPolicyMode, cfg.agentPolicyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading init-data entry: %s", err)
+		os.Exit(1)
+	}
+	whPolicy.initDataEntries = append(whPolicy.initDataEntries, policyEntry)
 
 	// Create our mutator
 	mt := kwhmutating.MutatorFunc(annotatePodMutator)
