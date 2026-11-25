@@ -18,10 +18,15 @@ import (
 )
 
 const (
-	initDataAnnotation = "io.katacontainers.config.hypervisor.cc_init_data"
-	podSpecDataKey     = "pod-spec.json"
-	initDataVersion    = "0.1.0"
-	initDataAlgorithm  = "sha256"
+	initDataAnnotation        = "io.katacontainers.config.hypervisor.cc_init_data"
+	clusterSettingsAnnotation = "io.katacontainers.config.initdata.cluster-settings"
+	ociSettingsAnnotation     = "io.katacontainers.config.initdata.oci-settings"
+	podSpecDataKey            = "pod-spec.json"
+	podMetadataDataKey        = "pod-metadata.json"
+	clusterSettingsDataKey    = "cluster-settings.json"
+	ociSettingsDataKey        = "oci-settings.json"
+	initDataVersion           = "0.1.0"
+	initDataAlgorithm         = "sha256"
 )
 
 type initData struct {
@@ -87,6 +92,15 @@ func injectPodSpecIntoInitData(pod *corev1.Pod) (bool, error) {
 		return false, fmt.Errorf("serialize PodSpec: %w", err)
 	}
 
+	metaCopy := pod.ObjectMeta.DeepCopy()
+	delete(metaCopy.Annotations, initDataAnnotation)
+	delete(metaCopy.Annotations, clusterSettingsAnnotation)
+	delete(metaCopy.Annotations, ociSettingsAnnotation)
+	podMetadata, err := json.Marshal(metaCopy)
+	if err != nil {
+		return false, fmt.Errorf("serialize ObjectMeta: %w", err)
+	}
+
 	var data *initData
 	if !ok || annotation == "" {
 		data = &initData{
@@ -100,11 +114,36 @@ func injectPodSpecIntoInitData(pod *corev1.Pod) (bool, error) {
 			return false, err
 		}
 	}
-	if data.Data[podSpecDataKey] == string(podSpec) {
+	changed := false
+
+	if data.Data[podSpecDataKey] != string(podSpec) {
+		data.Data[podSpecDataKey] = string(podSpec)
+		changed = true
+	}
+
+	if data.Data[podMetadataDataKey] != string(podMetadata) {
+		data.Data[podMetadataDataKey] = string(podMetadata)
+		changed = true
+	}
+
+	if cs, ok := pod.Annotations[clusterSettingsAnnotation]; ok {
+		if data.Data[clusterSettingsDataKey] != cs {
+			data.Data[clusterSettingsDataKey] = cs
+			changed = true
+		}
+	}
+
+	if os, ok := pod.Annotations[ociSettingsAnnotation]; ok {
+		if data.Data[ociSettingsDataKey] != os {
+			data.Data[ociSettingsDataKey] = os
+			changed = true
+		}
+	}
+
+	if !changed {
 		return false, nil
 	}
 
-	data.Data[podSpecDataKey] = string(podSpec)
 	encoded, err := encodeInitData(data)
 	if err != nil {
 		return false, err

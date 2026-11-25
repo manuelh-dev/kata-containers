@@ -117,6 +117,54 @@ func TestInjectPodSpecIntoInitDataCreatesAnnotation(t *testing.T) {
 	}
 }
 
+func TestInjectSettingsIntoInitData(t *testing.T) {
+	clusterSettings := `{"services":[{"name":"kubernetes","clusterIP":"10.96.0.1"}]}`
+	ociSettings := `{"1.2.0":{"namespaces":["ipc","uts","mount"]}}`
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				clusterSettingsAnnotation: clusterSettings,
+				ociSettingsAnnotation:     ociSettings,
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "example.com/workload:latest",
+			}},
+		},
+	}
+
+	changed, err := injectPodSpecIntoInitData(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected init-data to change")
+	}
+
+	data, err := decodeInitData(pod.Annotations[initDataAnnotation])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Data[clusterSettingsDataKey] != clusterSettings {
+		t.Fatalf("unexpected cluster-settings:\ngot:  %s\nwant: %s", data.Data[clusterSettingsDataKey], clusterSettings)
+	}
+	if data.Data[ociSettingsDataKey] != ociSettings {
+		t.Fatalf("unexpected oci-settings:\ngot:  %s\nwant: %s", data.Data[ociSettingsDataKey], ociSettings)
+	}
+
+	// Idempotent
+	changed, err = injectPodSpecIntoInitData(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("expected a second injection to be idempotent")
+	}
+}
+
 func TestInjectPodSpecIntoMalformedInitData(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

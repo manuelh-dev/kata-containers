@@ -118,7 +118,11 @@ func annotatePodMutator(_ context.Context, ar *kwhmodel.AdmissionReview, obj met
 	}
 
 	_, hasInitData := pod.Annotations[initDataAnnotation]
-	if hasInitData || *pod.Spec.RuntimeClassName == kataRuntimeClassName {
+	_, hasClusterSettings := pod.Annotations[clusterSettingsAnnotation]
+	_, hasOciSettings := pod.Annotations[ociSettingsAnnotation]
+	needsInitData := hasInitData || hasClusterSettings || hasOciSettings ||
+		*pod.Spec.RuntimeClassName == kataRuntimeClassName
+	if needsInitData {
 		initDataMutated, err := injectPodSpecIntoInitData(pod)
 		if err != nil {
 			return nil, fmt.Errorf("inject PodSpec into init-data: %w", err)

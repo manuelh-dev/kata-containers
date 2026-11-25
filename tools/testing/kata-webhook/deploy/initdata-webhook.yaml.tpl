@@ -91,7 +91,7 @@ webhooks:
           (has(object.metadata.annotations) &&
           'io.katacontainers.config.hypervisor.cc_init_data' in object.metadata.annotations) ||
           (has(object.spec.runtimeClassName) &&
-          object.spec.runtimeClassName == '${RUNTIME_CLASS}')
+          object.spec.runtimeClassName.matches('^kata-qemu-nvidia-gpu-(snp|tdx)-runtime-rs-(devkit|debug)$'))
     clientConfig:
       service:
         name: pod-annotate-webhook
